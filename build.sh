@@ -92,4 +92,20 @@ EOF
 echo "==> 执行本地 Ad-hoc 签名..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
-echo "==> 构建完成: $APP_BUNDLE"
+echo "==> 交叉编译 Windows 原生单文件客户端 (x64 & ARM64)..."
+export GOCACHE="/tmp/go-build-cache"
+export GOPATH="/tmp/go-path"
+mkdir -p "$GOCACHE" "$GOPATH"
+
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 /opt/homebrew/bin/go build \
+  -buildvcs=false \
+  -ldflags="-H windowsgui -s -w" \
+  -o "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" \
+  "$SCRIPT_DIR"
+
+ditto -c -k "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" "$BUILD_DIR/Claude-IP-Checker-Windows-x64-v1.0.0.zip"
+ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/Claude-IP-Checker-macOS-v1.0.0.zip"
+
+echo "==> 构建完成:"
+echo "  - macOS:   $APP_BUNDLE"
+echo "  - Windows: $BUILD_DIR/Claude-IP-Checker-Windows-x64.exe"

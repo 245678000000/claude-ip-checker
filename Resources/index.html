@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Claude AI IP 风险检测</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23d97757'/%3E%3Cpath d='M32 10v44M10 32h44M16.4 16.4l31.2 31.2M47.6 16.4L16.4 47.6' stroke='%23fff' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='48' cy='48' r='11' fill='%2316a34a' stroke='%23fff' stroke-width='3'/%3E%3C/svg%3E" />
   <style>
     :root {
       --bg-page: #f8f9fb;
@@ -969,18 +970,45 @@
       return (document.getElementById('customProxyInput').value || '').trim();
     }
 
-    // 向 Swift 原生宿主发送消息
+    // 向原生宿主发送消息（同时兼容 macOS WKWebView 与 Windows 本地宿主服务）
     function postToNative(action, payload = {}) {
+      const reqBody = {
+        action,
+        proxyMode: currentProxyMode,
+        customProxy: getCustomProxyValue(),
+        ...payload
+      };
+
       if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {
-        window.webkit.messageHandlers.nativeBridge.postMessage({
-          action,
-          proxyMode: currentProxyMode,
-          customProxy: getCustomProxyValue(),
-          ...payload
-        });
+        window.webkit.messageHandlers.nativeBridge.postMessage(reqBody);
         return true;
       }
+
+      if (window.location.protocol.startsWith('http')) {
+        runWindowsNativeBridge(reqBody);
+        return true;
+      }
+
       return false;
+    }
+
+    async function runWindowsNativeBridge(reqBody) {
+      const qs = `?proxyMode=${encodeURIComponent(reqBody.proxyMode)}&customProxy=${encodeURIComponent(reqBody.customProxy || '')}`;
+      if (reqBody.action === 'runFullCheck') {
+        fetch('/api/sys-proxy' + qs).then(r => r.json()).then(d => window.onNativeSystemProxy(d)).catch(() => {});
+        fetch('/api/china-ip' + qs).then(r => r.json()).then(d => window.onNativeChinaIP(d)).catch(() => {});
+        fetch('/api/cf-ip' + qs).then(r => r.json()).then(d => window.onNativeCloudflareIP(d)).catch(() => {});
+        fetch('/api/availability' + qs).then(r => r.json()).then(d => window.onNativeAvailability(d)).catch(() => {});
+        fetch('/api/claude-risk' + qs).then(r => r.json()).then(d => {
+          window.onNativeClaudeRisk(d);
+          const cc = encodeURIComponent((d && d.countryCode) || '');
+          fetch(`/api/dns-leak${qs}&cc=${cc}`).then(r => r.json()).then(dns => window.onNativeDNSLeak(dns)).catch(() => {});
+        }).catch(() => {});
+      } else if (reqBody.action === 'checkAvailability') {
+        fetch('/api/availability' + qs).then(r => r.json()).then(d => window.onNativeAvailability(d)).catch(() => {});
+      } else if (reqBody.action === 'checkDNS') {
+        fetch('/api/dns-leak' + qs).then(r => r.json()).then(d => window.onNativeDNSLeak(d)).catch(() => {});
+      }
     }
 
     // 触发全局检测
@@ -1207,7 +1235,8 @@
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown';
       document.getElementById('devTimezone').textContent = tz;
       document.getElementById('devLang').textContent = (navigator.languages || [navigator.language]).join(', ');
-      document.getElementById('devOS').textContent = 'macOS · Apple WebKit Native';
+      const isWin = navigator.userAgent.includes('Windows');
+      document.getElementById('devOS').textContent = isWin ? 'Windows · Native WebView2 Host' : 'macOS · Apple WebKit Native';
 
       // WebGL 渲染器提取
       try {
@@ -1377,6 +1406,16 @@
     window.addEventListener('DOMContentLoaded', () => {
       if (localStorage.getItem('claude_ip_theme') === 'dark') {
         document.body.classList.add('dark');
+      }
+      if (window.location.protocol.startsWith('http')) {
+        setInterval(() => {
+          fetch('/api/heartbeat', { method: 'POST', keepalive: true }).catch(() => {});
+        }, 2500);
+        window.addEventListener('beforeunload', () => {
+          if (navigator.sendBeacon) {
+            navigator.sendBeacon('/api/quit');
+          }
+        });
       }
       renderHistory();
       triggerFullCheck();
