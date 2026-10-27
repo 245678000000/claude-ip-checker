@@ -588,6 +588,190 @@
     .spinning svg {
       animation: spin 0.8s linear infinite;
     }
+
+    /* 封号概率预测横幅卡片 */
+    .ban-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 16px;
+      padding: 20px 24px;
+      box-shadow: var(--shadow-card);
+      margin-bottom: 18px;
+    }
+
+    .ban-grid {
+      display: grid;
+      grid-template-columns: 270px 1fr 290px;
+      gap: 24px;
+      align-items: center;
+    }
+
+    @media (max-width: 960px) {
+      .ban-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .ban-left {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      border-right: 1px solid var(--border-row);
+      padding-right: 20px;
+    }
+
+    @media (max-width: 960px) {
+      .ban-left {
+        border-right: none;
+        padding-right: 0;
+        border-bottom: 1px solid var(--border-row);
+        padding-bottom: 16px;
+      }
+    }
+
+    .ban-prob-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .ban-prob-num {
+      font-size: 38px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      color: #16a34a;
+    }
+
+    .ban-progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: var(--toolbar-bg);
+      overflow: hidden;
+      margin-top: 4px;
+    }
+
+    .ban-progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      width: 12%;
+      background: #16a34a;
+      transition: width 0.45s ease, background-color 0.3s ease;
+    }
+
+    .ban-factors {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      font-size: 13px;
+    }
+
+    .ban-factor-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .ban-scenes {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      background: var(--toolbar-bg);
+      border-radius: 12px;
+      padding: 12px 14px;
+    }
+
+    .ban-scene-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
+    /* 检查更新按钮与小红点 */
+    .update-dot {
+      display: none;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #ef4444;
+    }
+
+    .update-dot.visible {
+      display: inline-block;
+    }
+
+    /* 更新模态框 */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      backdrop-filter: blur(3px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+
+    .modal-backdrop.visible {
+      display: flex;
+    }
+
+    .modal-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-card);
+      border-radius: 16px;
+      width: 440px;
+      max-width: 92vw;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .modal-title {
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .modal-body {
+      font-size: 13.5px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+      margin-bottom: 18px;
+      white-space: pre-wrap;
+      max-height: 240px;
+      overflow-y: auto;
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    .btn-primary {
+      background: var(--accent-claude);
+      color: #ffffff;
+      border: none;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 7px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .btn-primary:hover {
+      opacity: 0.92;
+    }
   </style>
 </head>
 <body>
@@ -620,6 +804,11 @@
             <path d="M16 16h5v5"/>
           </svg>
           重新检测
+        </button>
+
+        <button id="btnCheckUpdate" class="btn-action" onclick="triggerUpdateCheck(true)" title="检查 GitHub 最新版本">
+          <span>v1.1.0 · 检查更新</span>
+          <span id="updateRedDot" class="update-dot"></span>
         </button>
 
         <!-- 深浅色切换按钮（复刻右上角半黑半白图标） -->
@@ -700,6 +889,59 @@
             <span id="claudeIP" class="ip-text selectable">检测中...</span>
           </div>
           <div id="claudeLoc" class="ip-loc-text selectable">正在分析 Claude 分流路由...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新增：Claude 账号封号概率预测与防封诊断报告 -->
+    <div class="ban-card">
+      <div class="card-header" style="margin-bottom: 12px;">
+        <span class="card-title">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          CLAUDE 账号封号概率预测 (BAN RISK PREDICTION)
+        </span>
+        <span id="banSummaryBadge" class="pill pill-gray">正在综合 6 维风控模型评估...</span>
+      </div>
+
+      <div class="ban-grid">
+        <!-- 左侧：封号概率百分比 -->
+        <div class="ban-left">
+          <div style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">当前环境综合封号概率</div>
+          <div class="ban-prob-row">
+            <span id="banProbNum" class="ban-prob-num">--%</span>
+            <span id="banProbLevel" class="pill pill-gray">计算中</span>
+          </div>
+          <div class="ban-progress-track">
+            <div id="banProgressFill" class="ban-progress-fill" style="width: 0%;"></div>
+          </div>
+          <div id="banMainAdvice" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+            正在结合 IP 类型、时区偏移、DNS 泄露与切换频率计算...
+          </div>
+        </div>
+
+        <!-- 中间：风险归因明细与防封建议 -->
+        <div id="banFactorList" class="ban-factors">
+          <div class="ban-factor-item">⏳ 正在扫描地区合规白名单与 ASN 信誉库...</div>
+          <div class="ban-factor-item">⏳ 正在比对本机系统时区与出口 IP 时区偏移...</div>
+          <div class="ban-factor-item">⏳ 正在检测 DNS / WebRTC 协议泄露与节点跳变记录...</div>
+        </div>
+
+        <!-- 右侧：三大使用场景风险评级 -->
+        <div class="ban-scenes">
+          <div class="ban-scene-row">
+            <span style="color: var(--text-secondary);">Claude.ai 网页对话</span>
+            <span id="sceneWebPill" class="pill pill-gray">评估中</span>
+          </div>
+          <div class="ban-scene-row">
+            <span style="color: var(--text-secondary);">Claude Code (CLI/API)</span>
+            <span id="sceneCliPill" class="pill pill-gray">评估中</span>
+          </div>
+          <div class="ban-scene-row">
+            <span style="color: var(--text-secondary);">新号注册 / Pro 绑卡</span>
+            <span id="scenePayPill" class="pill pill-gray">评估中</span>
+          </div>
         </div>
       </div>
     </div>
@@ -929,12 +1171,32 @@
     </div>
   </div>
 
+  <!-- 检查更新弹窗 -->
+  <div id="updateModal" class="modal-backdrop" onclick="if(event.target===this) closeUpdateModal()">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span id="updateModalTitle" class="modal-title">检查版本更新</span>
+        <button class="btn-card-mini" onclick="closeUpdateModal()">关闭</button>
+      </div>
+      <div id="updateModalBody" class="modal-body">正在连接 GitHub Releases 检查最新版本...</div>
+      <div class="modal-footer">
+        <button class="btn-action" onclick="openExternal('https://github.com/245678000000/claude-ip-checker/releases')">前往 GitHub Releases</button>
+        <button id="btnDownloadUpdate" class="btn-primary" style="display: none;" onclick="downloadLatestRelease()">立即下载更新</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     // 当前代理模式状态：'system' | 'custom' | 'direct'
+    const APP_VERSION = '1.1.0';
     let currentProxyMode = 'system';
     let currentClaudeTimezone = '';
     let currentClaudeIP = '';
-    let isChecking = false;
+    let lastRiskData = null;
+    let lastDNSLeaked = false;
+    let lastWebRTCLeaked = false;
+    let latestDownloadURL = 'https://github.com/245678000000/claude-ip-checker/releases';
+    let shouldPopupUpdateModal = false;
 
     // 切换深色/浅色主题
     function toggleTheme() {
@@ -1008,6 +1270,11 @@
         fetch('/api/availability' + qs).then(r => r.json()).then(d => window.onNativeAvailability(d)).catch(() => {});
       } else if (reqBody.action === 'checkDNS') {
         fetch('/api/dns-leak' + qs).then(r => r.json()).then(d => window.onNativeDNSLeak(d)).catch(() => {});
+      } else if (reqBody.action === 'checkUpdate') {
+        fetch(`/api/check-update${qs}&currentVersion=${encodeURIComponent(APP_VERSION)}`)
+          .then(r => r.json()).then(d => window.onNativeUpdateResult(d)).catch(() => {});
+      } else if (reqBody.action === 'openExternalURL') {
+        fetch(`/api/open-url?url=${encodeURIComponent(reqBody.url || '')}`).catch(() => {});
       }
     }
 
@@ -1145,10 +1412,12 @@
       }
 
       // 更新时区匹配校验与本地历史记录
+      lastRiskData = data;
       verifyTimezoneConsistency();
       if (data.success && data.ip && data.ip !== '获取失败') {
         saveHistoryItem(data);
       }
+      evaluateBanRisk();
     };
 
     window.onNativeAvailability = function(list) {
@@ -1166,8 +1435,10 @@
 
     window.onNativeDNSLeak = function(data) {
       if (!data) return;
+      lastDNSLeaked = Boolean(data.leaked);
       setPill('dnsStatusPill', data.statusText, data.leaked ? 'red' : 'green');
       document.getElementById('dnsExitInfo').textContent = `${data.dnsIP} (${data.dnsGeo})`;
+      evaluateBanRisk();
     };
 
     // ==================== WebRTC UDP 泄露探测 ====================
@@ -1214,20 +1485,249 @@
           );
 
           if (publicIPs.length === 0) {
+            lastWebRTCLeaked = false;
             setPill('webrtcStatusPill', '未检测到泄露', 'green');
             document.getElementById('webrtcIPInfo').textContent = '未暴露真实公网 UDP IP';
           } else if (currentClaudeIP && publicIPs.includes(currentClaudeIP)) {
+            lastWebRTCLeaked = false;
             setPill('webrtcStatusPill', '未检测到泄露', 'green');
             document.getElementById('webrtcIPInfo').textContent = publicIPs[0] + ' (与代理出口一致)';
           } else {
+            lastWebRTCLeaked = true;
             setPill('webrtcStatusPill', '存在UDP暴露', 'yellow');
             document.getElementById('webrtcIPInfo').textContent = publicIPs.join(', ');
           }
+          evaluateBanRisk();
         }, 1800);
       } catch (_) {
+        lastWebRTCLeaked = false;
         setPill('webrtcStatusPill', '未检测到泄露', 'green');
         document.getElementById('webrtcIPInfo').textContent = 'WebRTC 已受保护';
       }
+    }
+
+    // ==================== Claude 6 维封号概率预测引擎 ====================
+    function evaluateBanRisk() {
+      const data = lastRiskData;
+      if (!data || !data.success) {
+        document.getElementById('banProbNum').textContent = '--%';
+        setPill('banProbLevel', '无数据', 'gray');
+        setPill('banSummaryBadge', '等待出口 IP 数据', 'gray');
+        return;
+      }
+
+      let prob = 3; // 基础自然风控底数 3%
+      const factors = [];
+
+      // 维度 1：国家/地区支持白名单
+      if (!data.regionSupported) {
+        prob += 58;
+        factors.push('🚨 出口位于不支持地区 (' + (data.country || data.countryCode) + ')，极易触发秒封 (+58%)');
+      } else {
+        factors.push('✅ 出口地区在 Anthropic 官方支持白名单内 (' + data.country + ')');
+      }
+
+      // 维度 2：IP 属性（住宅 vs 云大厂机房 vs 廉价商业机房）
+      const ispLower = ((data.isp || '') + ' ' + (data.org || '')).toLowerCase();
+      const isTier1Cloud = ispLower.includes('google') || ispLower.includes('amazon') || ispLower.includes('microsoft') || ispLower.includes('oracle') || ispLower.includes('cloudflare');
+      if (data.isHosting) {
+        if (isTier1Cloud) {
+          prob += 11;
+          factors.push('⚠️ 大厂云机房 IP (' + data.isp + ' +11%)：日常对话/CLI 稳定，但切勿用于新号注册或绑卡');
+        } else {
+          prob += 24;
+          factors.push('⚠️ 商业机房/VPS 节点 (' + data.isp + ' +24%)：共享人数较多时易触发批量连坐风控');
+        }
+      } else {
+        prob += 2;
+        factors.push('✅ 原生/住宅 ISP 属性 (' + data.ipType + ')，信誉权重极高');
+      }
+
+      // 维度 3：黑名单与公开代理特征
+      if (data.torDetected || data.abuseDetected) {
+        prob += 45;
+        factors.push('🚨 命中 Tor 或黑名单滥用记录 (+45%)，请立即更换节点');
+      } else if (data.proxyDetected) {
+        prob += 22;
+        factors.push('⚠️ 被标记为公开代理池节点 (+22%)，容易触发 Cloudflare 盾与封号');
+      } else if (data.vpnDetected) {
+        prob += 12;
+        factors.push('⚠️ 带有商业 VPN 特征标记 (+12%)');
+      }
+
+      // 维度 4：本地系统时区 vs 出口 IP 时区偏移一致性
+      const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      if (data.timezone && data.timezone !== '未知' && localTz) {
+        if (localTz !== data.timezone) {
+          // 判断是否同属亚洲相近时区
+          const bothAsia = localTz.startsWith('Asia/') && data.timezone.startsWith('Asia/');
+          if (bothAsia) {
+            prob += 3;
+            factors.push('ℹ️ 本机时区 (' + localTz + ') 与 IP 时区 (' + data.timezone + ') 均在亚洲，偏移极小 (+3%)');
+          } else {
+            prob += 12;
+            factors.push('⚠️ 时区跨洲不一致 (+12%)：本机 ' + localTz + ' vs 节点 ' + data.timezone + '（网页端易触发风控）');
+          }
+        } else {
+          factors.push('✅ 本机系统时区与代理出口 IP 时区 100% 一致');
+        }
+      }
+
+      // 维度 5：DNS / WebRTC 泄露与 IPv6
+      if (lastDNSLeaked) {
+        prob += 18;
+        factors.push('🚨 检测到国内 DNS 泄露 (+18%)：建议在代理软件中开启 Fake-IP 或远程 DoH 解析');
+      }
+      if (lastWebRTCLeaked) {
+        prob += 14;
+        factors.push('⚠️ WebRTC UDP 暴露非代理公网 IP (+14%)');
+      }
+      if (data.isIPv6) {
+        prob += 8;
+        factors.push('⚠️ 当前为 IPv6 出口 (+8%)：建议使用 IPv4 节点防止前缀跳变');
+      }
+
+      // 维度 6：近期跨国切换节点频率（检查本地历史记录最近 5 条不同国家数量）
+      const hist = loadHistory().slice(0, 5);
+      const uniqueCountries = new Set(hist.map(h => h.country).filter(Boolean));
+      if (uniqueCountries.size >= 3) {
+        prob += 15;
+        factors.push('🚨 近期频繁跨国切换节点 (' + Array.from(uniqueCountries).join('/') + ' +15%)：固定单一地区可大幅降低封号率');
+      }
+
+      prob = Math.max(3, Math.min(98, prob));
+
+      // 更新封号概率 UI
+      const numEl = document.getElementById('banProbNum');
+      const fillEl = document.getElementById('banProgressFill');
+      numEl.textContent = prob + '%';
+      fillEl.style.width = prob + '%';
+
+      if (prob <= 20) {
+        numEl.style.color = '#16a34a';
+        fillEl.style.background = '#16a34a';
+        setPill('banProbLevel', '极低风险', 'green');
+        setPill('banSummaryBadge', '当前环境安全稳定 · 推荐固定使用该节点', 'green');
+        document.getElementById('banMainAdvice').textContent = '综合评估：当前网络特征健康，请保持节点固定，避免频繁切换国家。';
+      } else if (prob <= 45) {
+        numEl.style.color = '#d97706';
+        fillEl.style.background = '#f59e0b';
+        setPill('banProbLevel', '中低风险', 'yellow');
+        setPill('banSummaryBadge', '日常使用正常 · 注册/绑卡需谨慎', 'yellow');
+        document.getElementById('banMainAdvice').textContent = '综合评估：适合日常网页对话与 Claude Code，不建议在此环境下新注册或绑卡。';
+      } else {
+        numEl.style.color = '#dc2626';
+        fillEl.style.background = '#dc2626';
+        setPill('banProbLevel', '高危易封', 'red');
+        setPill('banSummaryBadge', '高危风控环境 · 强烈建议更换节点后再登录', 'red');
+        document.getElementById('banMainAdvice').textContent = '综合评估：存在明显风控诱因，直接登录 Claude 极易触发封号或手机验证拦截。';
+      }
+
+      document.getElementById('banFactorList').innerHTML = factors.slice(0, 4).map(f =>
+        `<div class="ban-factor-item">${f}</div>`
+      ).join('');
+
+      // 更新右侧三大使用场景评级
+      if (!data.regionSupported || prob >= 60) {
+        setPill('sceneWebPill', '极易封号', 'red');
+        setPill('sceneCliPill', '高危拦截', 'red');
+        setPill('scenePayPill', '禁止操作', 'red');
+      } else if (data.isHosting) {
+        setPill('sceneWebPill', prob <= 25 ? '安全可用' : '偶发验证', prob <= 25 ? 'green' : 'yellow');
+        setPill('sceneCliPill', '稳定可用', 'green');
+        setPill('scenePayPill', '不建议 (机房IP)', 'yellow');
+      } else {
+        setPill('sceneWebPill', '极佳 (原生/住宅)', 'green');
+        setPill('sceneCliPill', '极佳 (稳定)', 'green');
+        setPill('scenePayPill', '环境良好', 'green');
+      }
+    }
+
+    // ==================== 检查更新与外部链接处理 ====================
+    function triggerUpdateCheck(showModal) {
+      shouldPopupUpdateModal = Boolean(showModal);
+      if (showModal) {
+        document.getElementById('updateModal').classList.add('visible');
+        document.getElementById('updateModalTitle').textContent = '正在检查更新...';
+        document.getElementById('updateModalBody').textContent = `当前版本：v${APP_VERSION}\n正在连接 GitHub Releases 查询最新版本信息...`;
+        document.getElementById('btnDownloadUpdate').style.display = 'none';
+      }
+
+      const sent = postToNative('checkUpdate', { currentVersion: APP_VERSION });
+      if (!sent) {
+        // 浏览器兜底直接请求 GitHub API
+        fetch('https://api.github.com/repos/245678000000/claude-ip-checker/releases/latest')
+          .then(r => r.json())
+          .then(json => {
+            const latest = (json.tag_name || 'v1.1.0').replace(/^[vV]/, '');
+            const hasUp = latest !== APP_VERSION && latest > APP_VERSION;
+            window.onNativeUpdateResult({
+              currentVersion: 'v' + APP_VERSION,
+              latestVersion: 'v' + latest,
+              hasUpdate: hasUp,
+              releaseURL: json.html_url || 'https://github.com/245678000000/claude-ip-checker/releases',
+              downloadURL: json.html_url || 'https://github.com/245678000000/claude-ip-checker/releases',
+              releaseNotes: json.body || '',
+              errorMsg: ''
+            });
+          })
+          .catch(() => {
+            window.onNativeUpdateResult({
+              currentVersion: 'v' + APP_VERSION,
+              latestVersion: 'v' + APP_VERSION,
+              hasUpdate: false,
+              releaseURL: 'https://github.com/245678000000/claude-ip-checker/releases',
+              downloadURL: '',
+              releaseNotes: '',
+              errorMsg: '无法连接 GitHub 检查更新'
+            });
+          });
+      }
+    }
+
+    window.onNativeUpdateResult = function(res) {
+      if (!res) return;
+      const dot = document.getElementById('updateRedDot');
+      if (res.hasUpdate) {
+        dot.classList.add('visible');
+      } else {
+        dot.classList.remove('visible');
+      }
+
+      latestDownloadURL = res.downloadURL || res.releaseURL || 'https://github.com/245678000000/claude-ip-checker/releases';
+
+      if (!shouldPopupUpdateModal && !res.hasUpdate) {
+        return;
+      }
+
+      if (res.errorMsg) {
+        document.getElementById('updateModalTitle').textContent = '检查更新提示';
+        document.getElementById('updateModalBody').textContent = `当前版本：${res.currentVersion}\n${res.errorMsg}`;
+        document.getElementById('btnDownloadUpdate').style.display = 'none';
+      } else if (res.hasUpdate) {
+        document.getElementById('updateModal').classList.add('visible');
+        document.getElementById('updateModalTitle').textContent = `🎉 发现新版本 ${res.latestVersion}`;
+        document.getElementById('updateModalBody').textContent = `当前版本：${res.currentVersion}  →  最新版本：${res.latestVersion}\n\n更新内容：\n${res.releaseNotes || '包含新特性与风控模型升级'}`;
+        document.getElementById('btnDownloadUpdate').style.display = 'inline-block';
+      } else {
+        document.getElementById('updateModalTitle').textContent = `✅ 当前已是最新版本 (${res.currentVersion})`;
+        document.getElementById('updateModalBody').textContent = `当前运行版本：${res.currentVersion}\nGitHub 最新版本：${res.latestVersion}\n\n${res.releaseNotes || '所有风控规则与检测接口均为最新状态。'}`;
+        document.getElementById('btnDownloadUpdate').style.display = 'none';
+      }
+    };
+
+    function closeUpdateModal() {
+      document.getElementById('updateModal').classList.remove('visible');
+    }
+
+    function openExternal(url) {
+      if (!postToNative('openExternalURL', { url })) {
+        window.open(url, '_blank');
+      }
+    }
+
+    function downloadLatestRelease() {
+      openExternal(latestDownloadURL);
     }
 
     // ==================== 设备指纹与时区一致性校验 ====================
@@ -1419,6 +1919,7 @@
       }
       renderHistory();
       triggerFullCheck();
+      setTimeout(() => triggerUpdateCheck(false), 2500);
     });
   </script>
 </body>

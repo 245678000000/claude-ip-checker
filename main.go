@@ -88,6 +88,17 @@ type DNSLeakResult struct {
 	DNSGeo     string `json:"dnsGeo"`
 }
 
+// 客户端版本更新检查结果
+type UpdateCheckResult struct {
+	CurrentVersion string `json:"currentVersion"`
+	LatestVersion  string `json:"latestVersion"`
+	HasUpdate      bool   `json:"hasUpdate"`
+	ReleaseURL     string `json:"releaseURL"`
+	DownloadURL    string `json:"downloadURL"`
+	ReleaseNotes   string `json:"releaseNotes"`
+	ErrorMsg       string `json:"errorMsg"`
+}
+
 var unsupportedCountryCodes = map[string]bool{
 	"CN": true, "HK": true, "MO": true, "RU": true, "BY": true,
 	"IR": true, "KP": true, "SY": true, "CU": true, "AF": true,
@@ -737,6 +748,94 @@ func fetchBasicIPGeo(client *http.Client, ip string) (string, string) {
 	return "", ""
 }
 
+// 6. 检查 GitHub Release 最新版本
+func checkAppUpdate(currentVersion, proxyMode, customProxy string) UpdateCheckResult {
+	client := buildHTTPClient(proxyMode, customProxy, 6*time.Second, false)
+	apiURL := "https://api.github.com/repos/245678000000/claude-ip-checker/releases/latest"
+	raw := httpGetString(client, apiURL)
+	if !strings.Contains(raw, "tag_name") {
+		directClient := buildHTTPClient("direct", "", 5*time.Second, false)
+		raw = httpGetString(directClient, apiURL)
+	}
+
+	var parsed struct {
+		TagName string `json:"tag_name"`
+		HTMLURL string `json:"html_url"`
+		Body    string `json:"body"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+
+	if raw == "" || json.Unmarshal([]byte(raw), &parsed) != nil || parsed.TagName == "" {
+		return UpdateCheckResult{
+			CurrentVersion: currentVersion,
+			LatestVersion:  currentVersion,
+			HasUpdate:      false,
+			ReleaseURL:     "https://github.com/245678000000/claude-ip-checker/releases",
+			ErrorMsg:       "无法连接 GitHub 检查更新，请检查网络或代理设置",
+		}
+	}
+
+	cleanCur := strings.TrimLeft(strings.TrimSpace(currentVersion), "vV")
+	cleanLatest := strings.TrimLeft(strings.TrimSpace(parsed.TagName), "vV")
+	hasUpdate := compareSemver(cleanLatest, cleanCur)
+
+	dlURL := parsed.HTMLURL
+	for _, a := range parsed.Assets {
+		lower := strings.ToLower(a.Name)
+		if strings.Contains(lower, "windows") && strings.HasSuffix(lower, ".exe") {
+			dlURL = a.BrowserDownloadURL
+			break
+		}
+	}
+
+	return UpdateCheckResult{
+		CurrentVersion: "v" + cleanCur,
+		LatestVersion:  "v" + cleanLatest,
+		HasUpdate:      hasUpdate,
+		ReleaseURL:     parsed.HTMLURL,
+		DownloadURL:    dlURL,
+		ReleaseNotes:   parsed.Body,
+	}
+}
+
+func compareSemver(v1, v2 string) bool {
+	p1 := strings.Split(v1, ".")
+	p2 := strings.Split(v2, ".")
+	maxLen := len(p1)
+	if len(p2) > maxLen {
+		maxLen = len(p2)
+	}
+	for i := 0; i < maxLen; i++ {
+		var n1, n2 int
+		if i < len(p1) {
+			_, _ = fmt.Sscanf(p1[i], "%d", &n1)
+		}
+		if i < len(p2) {
+			_, _ = fmt.Sscanf(p2[i], "%d", &n2)
+		}
+		if n1 != n2 {
+			return n1 > n2
+		}
+	}
+	return false
+}
+
+func openExternalBrowser(targetURL string) {
+	if targetURL == "" {
+		return
+	}
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("rundll32", "url.dll,FileProtocolHandler", targetURL)
+		prepareBackgroundCmd(cmd)
+		_ = cmd.Start()
+	} else {
+		_ = exec.Command("open", targetURL).Start()
+	}
+}
+
 // 启动独立无边框应用窗口（优先使用 Windows 自带的 Edge / Chrome --app 模式）
 func launchAppWindow(appURL string) {
 	if runtime.GOOS != "windows" {
@@ -825,6 +924,21 @@ func main() {
 	mux.HandleFunc("/api/dns-leak", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		writeJSON(w, detectDNSLeak(q.Get("proxyMode"), q.Get("customProxy"), q.Get("cc")))
+	})
+
+	mux.HandleFunc("/api/check-update", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		curVer := q.Get("currentVersion")
+		if curVer == "" {
+			curVer = "1.1.0"
+		}
+		writeJSON(w, checkAppUpdate(curVer, q.Get("proxyMode"), q.Get("customProxy")))
+	})
+
+	mux.HandleFunc("/api/open-url", func(w http.ResponseWriter, r *http.Request) {
+		target := r.URL.Query().Get("url")
+		openExternalBrowser(target)
+		w.WriteHeader(http.StatusNoContent)
 	})
 
 	mux.HandleFunc("/api/heartbeat", func(w http.ResponseWriter, r *http.Request) {

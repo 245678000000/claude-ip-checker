@@ -77,8 +77,26 @@ class MainWindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
             runAvailabilityAsync(proxyMode: proxyMode, customProxy: customProxy)
         case "checkDNS":
             runDNSCheckAsync(proxyMode: proxyMode, customProxy: customProxy)
+        case "checkUpdate":
+            let curVer = (body["currentVersion"] as? String) ?? "1.1.0"
+            runUpdateCheckAsync(currentVersion: curVer, proxyMode: proxyMode, customProxy: customProxy)
+        case "openExternalURL":
+            if let urlStr = body["url"] as? String, let url = URL(string: urlStr) {
+                NSWorkspace.shared.open(url)
+            }
         default:
             break
+        }
+    }
+
+    func runUpdateCheckAsync(currentVersion: String, proxyMode: String, customProxy: String) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let res = NetworkDetector.shared.checkAppUpdate(
+                currentVersion: currentVersion,
+                proxyMode: proxyMode,
+                customProxy: customProxy
+            )
+            self.sendJSONToJS(funcName: "window.onNativeUpdateResult", payload: res)
         }
     }
 
@@ -172,6 +190,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainController?.webView.evaluateJavaScript("triggerFullCheck();", completionHandler: nil)
     }
 
+    @objc func checkUpdateMenuAction(_ sender: Any?) {
+        mainController?.webView.evaluateJavaScript("triggerUpdateCheck(true);", completionHandler: nil)
+    }
+
     /// 构建标准 macOS 菜单栏（支持 Cmd+Q, Cmd+R, Cmd+W, Cmd+C/V/A）
     private func setupMainMenu() {
         let mainMenu = NSMenu()
@@ -182,6 +204,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenuItem.submenu = appMenu
         appMenu.addItem(withTitle: "关于 Claude AI IP 风险检测", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(withTitle: "检查更新...", action: #selector(checkUpdateMenuAction(_:)), keyEquivalent: "u")
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "重新检测网络风险", action: #selector(refreshCheckAction(_:)), keyEquivalent: "r")
         appMenu.addItem(NSMenuItem.separator())

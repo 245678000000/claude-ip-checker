@@ -64,6 +64,17 @@ struct DNSLeakResult: Codable {
     var dnsGeo: String
 }
 
+/// 客户端版本更新检查结果
+struct UpdateCheckResult: Codable {
+    var currentVersion: String
+    var latestVersion: String
+    var hasUpdate: Bool
+    var releaseURL: String
+    var downloadURL: String
+    var releaseNotes: String
+    var errorMsg: String
+}
+
 /// 网络与风控检测核心引擎
 class NetworkDetector {
     static let shared = NetworkDetector()
@@ -677,5 +688,75 @@ class NetworkDetector {
             return (cc, parts.joined(separator: " "))
         }
         return ("", "")
+    }
+
+    // MARK: - 6. 检查 GitHub Release 最新版本
+    func checkAppUpdate(currentVersion: String, proxyMode: String, customProxy: String) -> UpdateCheckResult {
+        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        let apiURL = "https://api.github.com/repos/245678000000/claude-ip-checker/releases/latest"
+
+        var raw = curlGet(url: apiURL, extraArgs: proxyArgs, timeout: 6)
+        if !raw.contains("tag_name") {
+            // 若当前代理失败则尝试直连回退
+            raw = curlGet(url: apiURL, extraArgs: ["--noproxy", "*"], timeout: 5)
+        }
+
+        guard let data = raw.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tagName = json["tag_name"] as? String else {
+            return UpdateCheckResult(
+                currentVersion: currentVersion,
+                latestVersion: currentVersion,
+                hasUpdate: false,
+                releaseURL: "https://github.com/245678000000/claude-ip-checker/releases",
+                downloadURL: "",
+                releaseNotes: "",
+                errorMsg: "无法连接 GitHub 检查更新，请检查网络或代理设置"
+            )
+        }
+
+        let cleanCurrent = currentVersion.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        let cleanLatest = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
+        let hasUpdate = compareVersions(cleanLatest, isGreaterThan: cleanCurrent)
+
+        let htmlURL = (json["html_url"] as? String) ?? "https://github.com/245678000000/claude-ip-checker/releases"
+        let body = (json["body"] as? String) ?? "包含性能优化与风控规则更新。"
+
+        var macDownloadURL = htmlURL
+        if let assets = json["assets"] as? [[String: Any]] {
+            for asset in assets {
+                if let name = asset["name"] as? String,
+                   let dl = asset["browser_download_url"] as? String,
+                   name.lowercased().contains("macos") {
+                    macDownloadURL = dl
+                    break
+                }
+            }
+        }
+
+        return UpdateCheckResult(
+            currentVersion: "v\(cleanCurrent)",
+            latestVersion: "v\(cleanLatest)",
+            hasUpdate: hasUpdate,
+            releaseURL: htmlURL,
+            downloadURL: macDownloadURL,
+            releaseNotes: body,
+            errorMsg: ""
+        )
+    }
+
+    /// 语义化版本号对比 (如 "1.2.0" > "1.1.0")
+    private func compareVersions(_ v1: String, isGreaterThan v2: String) -> Bool {
+        let parts1 = v1.components(separatedBy: ".").compactMap { Int($0) }
+        let parts2 = v2.components(separatedBy: ".").compactMap { Int($0) }
+        let maxCount = max(parts1.count, parts2.count)
+        for i in 0..<maxCount {
+            let n1 = i < parts1.count ? parts1[i] : 0
+            let n2 = i < parts2.count ? parts2[i] : 0
+            if n1 != n2 {
+                return n1 > n2
+            }
+        }
+        return false
     }
 }

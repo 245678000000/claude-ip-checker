@@ -73,9 +73,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.1.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>NSHighResolutionCapable</key>
@@ -103,8 +103,8 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 /opt/homebrew/bin/go build \
   -o "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" \
   "$SCRIPT_DIR"
 
-ditto -c -k "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" "$BUILD_DIR/Claude-IP-Checker-Windows-x64-v1.0.0.zip"
-ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/Claude-IP-Checker-macOS-v1.0.0.zip"
+ditto -c -k "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" "$BUILD_DIR/Claude-IP-Checker-Windows-x64-v1.1.0.zip"
+ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/Claude-IP-Checker-macOS-v1.1.0.zip"
 
 echo "==> 构建完成:"
 echo "  - macOS:   $APP_BUNDLE"
