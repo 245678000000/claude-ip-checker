@@ -1,11 +1,18 @@
 import Cocoa
 import WebKit
+import UniformTypeIdentifiers
+
+struct NativeExportResult: Encodable {
+    var success: Bool
+    var error: String
+}
 
 /// 原生 WebView 消息处理器与主窗口控制器
 class MainWindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate {
     var window: NSWindow!
     var webView: WKWebView!
-    private var lastClaudeCountryCode: String = ""
+    private var batch = NativeBatchState()
+    private var trustedHTMLURL: URL?
 
     override init() {
         super.init()
@@ -47,6 +54,7 @@ class MainWindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
     /// 加载内置的 Resources/index.html
     private func loadLocalHTML() {
         if let htmlURL = Bundle.main.url(forResource: "index", withExtension: "html") {
+            trustedHTMLURL = htmlURL
             webView.loadFileURL(htmlURL, allowingReadAccessTo: htmlURL.deletingLastPathComponent())
             return
         }
@@ -55,120 +63,142 @@ class MainWindowController: NSObject, NSWindowDelegate, WKScriptMessageHandler, 
         let fallbackPath = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent("Resources/index.html")
         if FileManager.default.fileExists(atPath: fallbackPath.path) {
+            trustedHTMLURL = fallbackPath
             webView.loadFileURL(fallbackPath, allowingReadAccessTo: fallbackPath.deletingLastPathComponent())
         }
     }
 
-    /// 接收来自前端页面的异步指令
+    /// Only the bundled main document may issue native commands.
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "nativeBridge",
-              let body = message.body as? [String: Any],
-              let action = body["action"] as? String else {
-            return
-        }
-
-        let proxyMode = (body["proxyMode"] as? String) ?? "system"
-        let customProxy = (body["customProxy"] as? String) ?? ""
-
+        guard message.name == "nativeBridge", message.webView === webView, message.frameInfo.isMainFrame,
+              NativeBridgePolicy.trustedDocument(message.frameInfo.request.url, expected: trustedHTMLURL),
+              NativeBridgePolicy.trustedDocument(webView.url, expected: trustedHTMLURL),
+              let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        let proxyMode = body["proxyMode"] as? String ?? "system"
+        let customProxy = body["customProxy"] as? String ?? ""
         switch action {
         case "runFullCheck":
-            runFullCheckAsync(proxyMode: proxyMode, customProxy: customProxy)
-        case "checkAvailability":
-            runAvailabilityAsync(proxyMode: proxyMode, customProxy: customProxy)
-        case "checkDNS":
-            runDNSCheckAsync(proxyMode: proxyMode, customProxy: customProxy)
+            guard let runID = NativeBridgePolicy.runID(body["runId"]), batch.begin(runID) else { return }
+            runFullCheckAsync(proxyMode: proxyMode, customProxy: customProxy, runID: runID)
+        case "cancelCheck":
+            guard let runID = NativeBridgePolicy.runID(body["runId"]) else { return }
+            _ = batch.begin(runID)
+        case "checkAvailability", "checkDNS":
+            guard let runID = NativeBridgePolicy.runID(body["runId"]) else { return }
+            if batch.currentRunID == nil { _ = batch.begin(runID) }
+            guard batch.isCurrent(runID) else { return }
+            if action == "checkAvailability" {
+                runAvailabilityAsync(proxyMode: proxyMode, customProxy: customProxy, runID: runID)
+            } else { runDNSCheckAsync(proxyMode: proxyMode, customProxy: customProxy, runID: runID) }
         case "checkUpdate":
-            let curVer = (body["currentVersion"] as? String) ?? "1.1.0"
-            runUpdateCheckAsync(currentVersion: curVer, proxyMode: proxyMode, customProxy: customProxy)
+            let version = body["currentVersion"] as? String
+                ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.1.1"
+            runUpdateCheckAsync(currentVersion: version, proxyMode: proxyMode, customProxy: customProxy)
         case "openExternalURL":
-            if let urlStr = body["url"] as? String, let url = URL(string: urlStr) {
+            if let text = body["url"] as? String, let url = NativeBridgePolicy.externalURL(text) {
                 NSWorkspace.shared.open(url)
             }
-        default:
-            break
+        case "exportReport":
+            let text = body["text"] as? String ?? (body["payload"] as? [String: Any])?["text"] as? String ?? ""
+            exportReport(text)
+        default: break
+        }
+    }
+
+    /// Never give a remote page or a second local document the native bridge.
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        if NativeBridgePolicy.trustedDocument(navigationAction.request.url, expected: trustedHTMLURL),
+           navigationAction.targetFrame?.isMainFrame != false {
+            decisionHandler(.allow)
+        } else {
+            decisionHandler(.cancel)
+            if navigationAction.navigationType == .linkActivated,
+               let text = navigationAction.request.url?.absoluteString,
+               let url = NativeBridgePolicy.externalURL(text) { NSWorkspace.shared.open(url) }
+        }
+    }
+
+    private func exportReport(_ text: String) {
+        guard NativeBridgePolicy.validReport(text) else {
+            sendJSONToJS(funcName: "window.onNativeExportResult", payload: NativeExportResult(success: false, error: "报告须为 1 MiB 以内的 JSON"))
+            return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "claude-ip-diagnostics.json"
+        panel.canCreateDirectories = true
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK, let url = panel.url else {
+                self.sendJSONToJS(funcName: "window.onNativeExportResult", payload: NativeExportResult(success: false, error: "已取消保存"))
+                return
+            }
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                self.sendJSONToJS(funcName: "window.onNativeExportResult", payload: NativeExportResult(success: true, error: ""))
+            } catch {
+                self.sendJSONToJS(funcName: "window.onNativeExportResult", payload: NativeExportResult(success: false, error: "保存失败，请重试"))
+            }
         }
     }
 
     func runUpdateCheckAsync(currentVersion: String, proxyMode: String, customProxy: String) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let res = NetworkDetector.shared.checkAppUpdate(
-                currentVersion: currentVersion,
-                proxyMode: proxyMode,
-                customProxy: customProxy
-            )
-            self.sendJSONToJS(funcName: "window.onNativeUpdateResult", payload: res)
+            let result = NetworkDetector.shared.checkAppUpdate(currentVersion: currentVersion, proxyMode: proxyMode, customProxy: customProxy)
+            self.sendJSONToJS(funcName: "window.onNativeUpdateResult", payload: result)
         }
     }
 
-    /// 并发执行全量检测并流式回调前端
-    func runFullCheckAsync(proxyMode: String, customProxy: String) {
-        // 1. 立即刷新系统代理状态
+    func runFullCheckAsync(proxyMode: String, customProxy: String, runID: Int) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let sysInfo = NetworkDetector.shared.getSystemProxyInfo()
-            self.sendJSONToJS(funcName: "window.onNativeSystemProxy", payload: sysInfo)
+            self.sendJSONToJS(funcName: "window.onNativeSystemProxy", payload: NetworkDetector.shared.getSystemProxyInfo(), runID: runID)
         }
-
-        // 2. 并发检测：中国出口 IPv4
         DispatchQueue.global(qos: .userInitiated).async {
-            let cnData = NetworkDetector.shared.detectChinaIPv4()
-            self.sendJSONToJS(funcName: "window.onNativeChinaIP", payload: cnData)
+            self.sendJSONToJS(funcName: "window.onNativeChinaIP", payload: NetworkDetector.shared.detectChinaIPv4(), runID: runID)
         }
-
-        // 3. 并发检测：Cloudflare 出口 IP
         DispatchQueue.global(qos: .userInitiated).async {
-            let cfData = NetworkDetector.shared.detectCloudflareIP(proxyMode: proxyMode, customProxy: customProxy)
-            self.sendJSONToJS(funcName: "window.onNativeCloudflareIP", payload: cfData)
+            let result = NetworkDetector.shared.detectCloudflareIP(proxyMode: proxyMode, customProxy: customProxy)
+            self.sendJSONToJS(funcName: "window.onNativeCloudflareIP", payload: result, runID: runID)
         }
-
-        // 4. 并发检测：Claude AI 出口 IP、风控属性与信任评分，完成后联动 DNS 泄露判断
         DispatchQueue.global(qos: .userInitiated).async {
-            let claudeData = NetworkDetector.shared.detectClaudeIPAndRisk(proxyMode: proxyMode, customProxy: customProxy)
-            self.lastClaudeCountryCode = claudeData.countryCode
-            self.sendJSONToJS(funcName: "window.onNativeClaudeRisk", payload: claudeData)
-
-            let dnsData = NetworkDetector.shared.detectDNSLeak(
-                proxyMode: proxyMode,
-                customProxy: customProxy,
-                claudeCountryCode: claudeData.countryCode
-            )
-            self.sendJSONToJS(funcName: "window.onNativeDNSLeak", payload: dnsData)
+            let result = NetworkDetector.shared.detectClaudeIPAndRisk(proxyMode: proxyMode, customProxy: customProxy)
+            DispatchQueue.main.async {
+                guard self.batch.isCurrent(runID) else { return }
+                self.batch.setCountry(result.countryCode, runID: runID)
+                self.sendJSONToJS(funcName: "window.onNativeClaudeRisk", payload: result, runID: runID)
+                self.runDNSCheckAsync(proxyMode: proxyMode, customProxy: customProxy, runID: runID)
+            }
         }
-
-        // 5. 并发检测：Claude 可用性与延迟测速
-        runAvailabilityAsync(proxyMode: proxyMode, customProxy: customProxy)
+        runAvailabilityAsync(proxyMode: proxyMode, customProxy: customProxy, runID: runID)
     }
 
-    func runAvailabilityAsync(proxyMode: String, customProxy: String) {
+    func runAvailabilityAsync(proxyMode: String, customProxy: String, runID: Int) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let list = NetworkDetector.shared.detectClaudeAvailability(proxyMode: proxyMode, customProxy: customProxy)
-            self.sendJSONToJS(funcName: "window.onNativeAvailability", payload: list)
+            let result = NetworkDetector.shared.detectClaudeAvailability(proxyMode: proxyMode, customProxy: customProxy)
+            self.sendJSONToJS(funcName: "window.onNativeAvailability", payload: result, runID: runID)
         }
     }
 
-    func runDNSCheckAsync(proxyMode: String, customProxy: String) {
-        let cc = self.lastClaudeCountryCode
+    func runDNSCheckAsync(proxyMode: String, customProxy: String, runID: Int) {
+        guard batch.isCurrent(runID) else { return }
+        let countryCode = batch.countryCode
         DispatchQueue.global(qos: .userInitiated).async {
-            let dnsData = NetworkDetector.shared.detectDNSLeak(
-                proxyMode: proxyMode,
-                customProxy: customProxy,
-                claudeCountryCode: cc
-            )
-            self.sendJSONToJS(funcName: "window.onNativeDNSLeak", payload: dnsData)
+            let result = NetworkDetector.shared.detectDNSLeak(proxyMode: proxyMode, customProxy: customProxy, claudeCountryCode: countryCode)
+            self.sendJSONToJS(funcName: "window.onNativeDNSLeak", payload: result, runID: runID)
         }
     }
 
-    /// 将 Codable 结构体序列化为 JSON 并在主线程调用前端 JS 函数
-    private func sendJSONToJS<T: Encodable>(funcName: String, payload: T) {
-        let encoder = JSONEncoder()
-        guard let data = try? encoder.encode(payload),
-              let jsonStr = String(data: data, encoding: .utf8) else {
-            return
-        }
+    /// Queue and validate on the main thread, including the moment the JS callback runs.
+    private func sendJSONToJS<T: Encodable>(funcName: String, payload: T, runID: Int? = nil) {
+        guard let data = try? JSONEncoder().encode(payload), let json = String(data: data, encoding: .utf8) else { return }
         DispatchQueue.main.async {
-            let js = "\(funcName)(\(jsonStr));"
-            self.webView.evaluateJavaScript(js, completionHandler: nil)
+            guard NativeBridgePolicy.trustedDocument(self.webView.url, expected: self.trustedHTMLURL) else { return }
+            if let runID, !self.batch.isCurrent(runID) { return }
+            let args = runID.map { "\(json), \($0)" } ?? json
+            self.webView.evaluateJavaScript("\(funcName)(\(args));", completionHandler: nil)
         }
     }
+
 }
 
 /// 应用生命周期代理

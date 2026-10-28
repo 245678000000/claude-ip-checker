@@ -1,14 +1,27 @@
 import Foundation
+import CoreFoundation
+import Darwin
 
-/// 系统代理信息结构体
+struct NativeHTTPResponse {
+    var body: String = ""
+    var statusCode: Int = 0
+    var latencyMs: Int = 0
+    var error: String = ""
+    var effectiveURL: String = ""
+
+    var succeeded: Bool { error.isEmpty && (200..<300).contains(statusCode) }
+}
+
+typealias NativeHTTPRequest = (String, [String], Int, Bool) -> NativeHTTPResponse
+
 struct SystemProxyInfo: Codable {
     var enabled: Bool
     var httpProxy: String?
     var socksProxy: String?
     var summary: String
+    var status: String = "observed"
 }
 
-/// 顶部出口 IP 简要卡片数据
 struct ExitIPCardData: Codable {
     var ip: String
     var countryCode: String
@@ -16,55 +29,67 @@ struct ExitIPCardData: Codable {
     var locationText: String
     var isIPv6: Bool
     var success: Bool
+    var source: String = ""
+    var observedAt: String = ""
 }
 
-/// Claude 核心风险与属性完整数据
+struct EvidenceSignal: Codable, Equatable {
+    var status: String
+    var source: String
+}
+
 struct ClaudeRiskData: Codable {
-    var ip: String
-    var isIPv6: Bool
-    var country: String
-    var countryCode: String
-    var flag: String
-    var city: String
-    var region: String
-    var asn: String
-    var isp: String
-    var org: String
-    var timezone: String
-    var ipType: String          // "机房IP" | "住宅IP" | "移动网络"
-    var ipTypeEn: String        // "(Hosting)" | "(Residential)" | "(Mobile)"
-    var isHosting: Bool
-    var trustScore: Int         // 0 - 100
-    var trustLevel: String      // "纯净" | "低风险" | "中风险" | "高危"
-    var trustDesc: String       // "该 IP 信誉优异" 等
-    var regionSupported: Bool   // Claude 是否支持该地区
-    var regionStatusText: String
-    var vpnDetected: Bool
-    var proxyDetected: Bool
-    var torDetected: Bool
-    var crawlerDetected: Bool
-    var abuseDetected: Bool
-    var success: Bool
+    var ip: String = "获取失败"
+    var isIPv6: Bool = false
+    var country: String = "未知"
+    var countryCode: String = ""
+    var flag: String = "🌐"
+    var city: String = "未知"
+    var region: String = ""
+    var asn: String = "未知"
+    var isp: String = "未知"
+    var org: String = ""
+    var timezone: String = "未知"
+    var ipType: String = "未知"
+    var ipTypeEn: String = ""
+    // Legacy booleans describe detected values only; read signals for unknown/error.
+    var isHosting: Bool = false
+    var trustScore: Int = 0
+    var trustLevel: String = "未评级"
+    var trustDesc: String = "未执行账号信誉检测；仅展示本次证据"
+    var regionSupported: Bool = false
+    var regionStatusText: String = "待官方核对"
+    var vpnDetected: Bool = false
+    var proxyDetected: Bool = false
+    var torDetected: Bool = false
+    var crawlerDetected: Bool = false
+    var abuseDetected: Bool = false
+    var success: Bool = false
+    var signals: [String: EvidenceSignal] = [:]
+    var exitSource: String = ""
+    var exitVerified: Bool = false
+    var observedAt: String = ""
 }
 
-/// 单个域名可用性测速结果
 struct EndpointPingResult: Codable {
     var domain: String
     var reachable: Bool
     var latencyMs: Int
     var statusCode: Int
     var statusText: String
+    var status: String
 }
 
-/// DNS 泄露检测结果
 struct DNSLeakResult: Codable {
-    var leaked: Bool
-    var statusText: String
-    var dnsIP: String
-    var dnsGeo: String
+    var leaked: Bool = false // Geography mismatch alone does not establish a leak.
+    var statusText: String = "解析器结果未知"
+    var dnsIP: String = "未知"
+    var dnsGeo: String = "未知"
+    var status: String = "unknown"
+    var source: String = ""
+    var error: String = ""
 }
 
-/// 客户端版本更新检查结果
 struct UpdateCheckResult: Codable {
     var currentVersion: String
     var latestVersion: String
@@ -75,43 +100,273 @@ struct UpdateCheckResult: Codable {
     var errorMsg: String
 }
 
-/// 网络与风控检测核心引擎
-class NetworkDetector {
-    static let shared = NetworkDetector()
+/// Deterministic parser seams shared by live requests and offline fixtures.
+enum NativeDiagnostics {
+    static let signalNames = ["vpn", "proxy", "tor", "crawler", "abuse", "hosting", "mobile"]
+    static let hostingKeywords = ["google", "amazon", "aws", "cloudflare", "microsoft", "azure",
+        "digitalocean", "linode", "akamai", "vultr", "choopa", "hetzner", "ovh", "oracle",
+        "alibaba", "aliyun", "tencent", "huawei", "leaseweb", "contabo", "datacamp", "cdn77",
+        "psychz", "zenlayer", "dmit", "bandwagon", "it7", "multacom", "sharktech", "colocrossing",
+        "quadranet", "hostinger", "equinix", "fastly", "kamatera", "upcloud", "scaleway", "ionos",
+        "racknerd", "buyvm", "frantech", "gcore", "misaka", "nearoute", "xtom", "hosting", "datacenter", "cloud", "vps"]
 
-    /// Anthropic / Claude 不支持的国家或地区代码黑名单
-    private let unsupportedCountryCodes: Set<String> = [
-        "CN", "HK", "MO", "RU", "BY", "IR", "KP", "SY", "CU", "AF", "VE", "MM", "SD"
-    ]
+    static func timestamp() -> String { ISO8601DateFormatter().string(from: Date()) }
 
-    /// 常见云厂商与机房 ASN / 运营商关键词
-    private let hostingKeywords: [String] = [
-        "google", "amazon", "aws", "cloudflare", "microsoft", "azure", "digitalocean",
-        "linode", "akamai", "vultr", "choopa", "hetzner", "ovh", "oracle", "alibaba",
-        "aliyun", "tencent", "huawei", "cogent", "leaseweb", "contabo", "datacamp",
-        "cdn77", "psychz", "zenlayer", "dmit", "bandwagon", "it7", "multacom",
-        "sharktech", "colocrossing", "quadranet", "hostinger", "equinix", "fastly",
-        "kamatera", "upcloud", "scaleway", "ionos", "racknerd", "buyvm", "frantech",
-        "gcore", "misaka", "nearoute", "xtom", "hosting", "datacenter", "cloud", "vps", "server"
-    ]
+    static func normalizedIP(_ text: String) -> String? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= 45, !value.contains("%"), !value.contains("\0") else { return nil }
+        // Darwin's inet_pton accepts some leading-zero forms; reject ambiguous IPv4 spelling.
+        if value.contains(".") || !value.contains(":") {
+            let tail = value.split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? value
+            let octets = tail.split(separator: ".", omittingEmptySubsequences: false)
+            guard octets.count == 4, octets.allSatisfy({ part in
+                !part.isEmpty && part.utf8.allSatisfy { (48...57).contains($0) }
+                    && (part.count == 1 || part.first != "0") && (Int(part) ?? 256) <= 255
+            }) else { return nil }
+        }
+        var address4 = in_addr()
+        if value.withCString({ inet_pton(AF_INET, $0, &address4) }) == 1 {
+            var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+            guard inet_ntop(AF_INET, &address4, &buffer, socklen_t(buffer.count)) != nil else { return nil }
+            return String(cString: buffer)
+        }
+        var address6 = in6_addr()
+        if value.withCString({ inet_pton(AF_INET6, $0, &address6) }) == 1 {
+            var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+            guard inet_ntop(AF_INET6, &address6, &buffer, socklen_t(buffer.count)) != nil else { return nil }
+            return String(cString: buffer)
+        }
+        return nil
+    }
 
-    /// 将两位国家代码转换为国旗 Emoji
-    func countryCodeToFlag(_ code: String) -> String {
-        let upper = code.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard upper.count == 2 else { return "🌐" }
-        let base: UInt32 = 127397
-        var scalarView = String.UnicodeScalarView()
-        for scalar in upper.unicodeScalars {
-            if let flagScalar = UnicodeScalar(base + scalar.value) {
-                scalarView.append(flagScalar)
+    static func countryCode(_ text: String) -> String {
+        let code = text.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return code.utf8.count == 2 && code.utf8.allSatisfy { (65...90).contains($0) } ? code : ""
+    }
+
+    static func countryFlag(_ text: String) -> String {
+        let code = countryCode(text)
+        guard !code.isEmpty else { return "🌐" }
+        return String(String.UnicodeScalarView(code.unicodeScalars.compactMap { UnicodeScalar(127397 + $0.value) }))
+    }
+
+    static func json(_ response: NativeHTTPResponse) -> [String: Any]? {
+        guard response.succeeded, let data = response.body.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+
+    // Foundation can bridge numeric 0/1 as Bool; only JSON true/false are evidence.
+    static func strictBool(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
+    }
+
+    static func trace(_ response: NativeHTTPResponse) -> (ip: String, countryCode: String)? {
+        guard response.succeeded else { return nil }
+        var entries: [String: String] = [:]
+        for line in response.body.components(separatedBy: .newlines) {
+            let parts = line.split(separator: "=", maxSplits: 1).map(String.init)
+            if parts.count == 2 { entries[parts[0]] = parts[1] }
+        }
+        guard let ip = normalizedIP(entries["ip"] ?? "") else { return nil }
+        return (ip, countryCode(entries["loc"] ?? ""))
+    }
+
+    static func httpStatus(_ code: Int, error: String = "") -> String {
+        guard error.isEmpty, (100...599).contains(code) else { return "error" }
+        switch code {
+        case 200..<300: return "ok"
+        case 300..<400: return "redirect"
+        case 401, 403: return "blocked"
+        case 429: return "rate_limited"
+        case 500..<600: return "server_error"
+        default: return "http_error"
+        }
+    }
+
+    static func endpoint(domain: String, response: NativeHTTPResponse) -> EndpointPingResult {
+        let status = httpStatus(response.statusCode, error: response.error)
+        let text = ["ok": "HTTP 响应成功（未验证账号功能）", "redirect": "HTTP 重定向",
+                    "blocked": "HTTP 访问受限", "rate_limited": "HTTP 请求限流",
+                    "server_error": "HTTP 服务端错误", "http_error": "HTTP 非成功响应", "error": "请求失败"]
+        return EndpointPingResult(domain: domain, reachable: (100...599).contains(response.statusCode),
+                                  latencyMs: max(0, response.latencyMs), statusCode: response.statusCode,
+                                  statusText: text[status] ?? "请求失败", status: status)
+    }
+
+    static func resolverCountry(_ dns: [String: Any]) -> String {
+        for key in ["countryCode", "country_code"] {
+            let code = countryCode(dns[key] as? String ?? "")
+            if !code.isEmpty { return code }
+        }
+        let geography = (dns["country"] as? String) ?? (dns["geo"] as? String) ?? ""
+        let head = geography.components(separatedBy: CharacterSet(charactersIn: ",-")).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let code = countryCode(head)
+        if !code.isEmpty { return code }
+        let aliases = ["china": "CN", "mainland china": "CN", "china mainland": "CN",
+                       "united states": "US", "united states of america": "US", "united kingdom": "GB",
+                       "hong kong": "HK", "taiwan": "TW"]
+        if let alias = aliases[head.lowercased()] { return alias }
+        let locale = Locale(identifier: "en_US")
+        return Locale.Region.isoRegions.first { locale.localizedString(forRegionCode: $0.identifier)?.caseInsensitiveCompare(head) == .orderedSame }?.identifier ?? ""
+    }
+
+    static func dns(response: NativeHTTPResponse, source: String, exitCountry: String) -> DNSLeakResult {
+        var result = DNSLeakResult(source: source)
+        guard response.succeeded else {
+            result.status = "error"
+            result.statusText = "DNS 检测失败 / 结果未知"
+            result.error = response.error.isEmpty ? "HTTP \(response.statusCode)" : response.error
+            return result
+        }
+        guard let data = json(response) else {
+            result.status = "error"; result.error = "invalid_json"; result.statusText = "DNS 响应解析失败"
+            return result
+        }
+        guard let dns = data["dns"] as? [String: Any], let ip = normalizedIP(dns["ip"] as? String ?? "") else {
+            result.error = "resolver_not_returned"
+            return result
+        }
+        result.dnsIP = ip
+        result.dnsGeo = (dns["geo"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "未知"
+        let resolverCC = resolverCountry(dns)
+        let exitCC = countryCode(exitCountry)
+        let differs = !resolverCC.isEmpty && !exitCC.isEmpty && resolverCC != exitCC
+        result.status = differs ? "mismatch" : "observed"
+        result.statusText = differs ? "解析器与出口地区不同（不等同泄露）" : "已观测解析器（仅当前请求路径）"
+        return result
+    }
+
+    static func risk(ip: String, source: String, verified: Bool,
+                     ipAPI: NativeHTTPResponse, ipWho: NativeHTTPResponse,
+                     observedAt: String = timestamp()) -> ClaudeRiskData {
+        var result = ClaudeRiskData(observedAt: observedAt)
+        result.signals = Dictionary(uniqueKeysWithValues: signalNames.map { ($0, EvidenceSignal(status: "unknown", source: "未取得字段")) })
+        guard let validIP = normalizedIP(ip) else { return result }
+        result.ip = validIP; result.isIPv6 = validIP.contains(":"); result.success = true
+        result.exitSource = source; result.exitVerified = verified
+
+        func merge(_ field: String, _ value: Any?, _ source: String) {
+            guard let value = strictBool(value) else { return }
+            // Preserve positive provider observations instead of brand-based overrides.
+            if result.signals[field]?.status != "detected" {
+                result.signals[field] = EvidenceSignal(status: value ? "detected" : "not_detected", source: source)
             }
         }
-        return String(scalarView)
+        func markFailure(_ fields: [String], _ source: String) {
+            for field in fields where result.signals[field]?.status == "unknown" {
+                result.signals[field] = EvidenceSignal(status: "error", source: source)
+            }
+        }
+        func value(_ object: [String: Any], _ name: String, default fallback: String = "") -> String {
+            guard let text = object[name] as? String, !text.isEmpty else { return fallback }
+            return text
+        }
+
+        if let a = json(ipAPI), a["status"] as? String == "success",
+           normalizedIP(value(a, "query")) == validIP {
+            result.country = value(a, "country", default: result.country)
+            result.countryCode = countryCode(value(a, "countryCode"))
+            result.city = value(a, "city", default: result.city)
+            result.region = value(a, "regionName")
+            result.asn = value(a, "as", default: result.asn).components(separatedBy: " ").first ?? "未知"
+            result.isp = value(a, "isp", default: result.isp); result.org = value(a, "org")
+            result.timezone = value(a, "timezone", default: result.timezone)
+            for field in ["hosting", "proxy", "mobile"] { merge(field, a[field], "ip-api.com (HTTP): \(field)") }
+        } else { markFailure(["hosting", "proxy", "mobile"], "ip-api.com: 请求或响应无效") }
+
+        if let b = json(ipWho), strictBool(b["success"]) == true,
+           normalizedIP(value(b, "ip")) == validIP {
+            if result.country == "未知" { result.country = value(b, "country", default: result.country) }
+            if result.countryCode.isEmpty { result.countryCode = countryCode(value(b, "country_code")) }
+            if result.city == "未知" { result.city = value(b, "city", default: result.city) }
+            if result.region.isEmpty { result.region = value(b, "region") }
+            if let tz = b["timezone"] as? [String: Any], result.timezone == "未知" { result.timezone = value(tz, "id", default: result.timezone) }
+            if let connection = b["connection"] as? [String: Any] {
+                if result.asn == "未知", let asn = connection["asn"] as? Int, asn > 0 { result.asn = "AS\(asn)" }
+                if result.isp == "未知" { result.isp = value(connection, "isp", default: result.isp) }
+                if result.org.isEmpty { result.org = value(connection, "org") }
+            }
+            let security = b["security"] as? [String: Any] ?? [:]
+            for field in signalNames {
+                merge(field, security[field], "ipwho.is: security.\(field)")
+                if result.signals[field]?.status == "unknown" {
+                    result.signals[field]?.source = "ipwho.is: security.\(field) 未返回"
+                }
+            }
+        } else { markFailure(["vpn", "proxy", "tor", "crawler", "hosting", "mobile"], "ipwho.is: 请求或响应无效") }
+
+        let provider = "\(result.isp) \(result.org) \(result.asn)".lowercased()
+        if ["unknown", "error"].contains(result.signals["hosting"]?.status ?? ""),
+           hostingKeywords.contains(where: { provider.contains($0) }) {
+            result.signals["hosting"] = EvidenceSignal(status: "detected", source: "ASN/ISP heuristic")
+        }
+        result.isHosting = result.signals["hosting"]?.status == "detected"
+        if result.isHosting { result.ipType = "机房IP"; result.ipTypeEn = "(Hosting)" }
+        else if result.signals["mobile"]?.status == "detected" { result.ipType = "移动网络"; result.ipTypeEn = "(Mobile)" }
+        result.vpnDetected = result.signals["vpn"]?.status == "detected"
+        result.proxyDetected = result.signals["proxy"]?.status == "detected"
+        result.torDetected = result.signals["tor"]?.status == "detected"
+        result.crawlerDetected = result.signals["crawler"]?.status == "detected"
+        result.abuseDetected = result.signals["abuse"]?.status == "detected"
+        result.flag = countryFlag(result.countryCode)
+        return result
     }
+}
+
+/// These decisions are pure so the bridge boundary and batching can be tested offline.
+enum NativeBridgePolicy {
+    static func runID(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let value = number.doubleValue
+        guard value.isFinite, value >= 0, value <= 9_007_199_254_740_991, value.rounded(.towardZero) == value else { return nil }
+        return Int(value)
+    }
+    static func externalURL(_ text: String) -> URL? {
+        guard let url = URL(string: text), url.scheme?.lowercased() == "https",
+              let host = url.host, !host.isEmpty, url.user == nil, url.password == nil else { return nil }
+        return url
+    }
+    static func trustedDocument(_ url: URL?, expected: URL?) -> Bool {
+        guard let url, let expected, url.isFileURL, expected.isFileURL,
+              url.host == nil || url.host == "" || url.host == "localhost" else { return false }
+        return url.standardizedFileURL.resolvingSymlinksInPath().path == expected.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+    static func validReport(_ text: String) -> Bool {
+        guard let data = text.data(using: .utf8), data.count <= 1_048_576,
+              (try? JSONSerialization.jsonObject(with: data)) != nil else { return false }
+        return true
+    }
+}
+
+struct NativeBatchState {
+    private(set) var currentRunID: Int?
+    private(set) var countryCode = ""
+    mutating func begin(_ runID: Int) -> Bool {
+        guard currentRunID == nil || runID > currentRunID! else { return false }
+        currentRunID = runID; countryCode = ""
+        return true
+    }
+    func isCurrent(_ runID: Int) -> Bool { currentRunID == runID }
+    mutating func setCountry(_ value: String, runID: Int) {
+        if isCurrent(runID) { countryCode = value }
+    }
+}
+
+class NetworkDetector {
+    static let shared = NetworkDetector()
+    private let injectedRequest: NativeHTTPRequest?
+    init(request: NativeHTTPRequest? = nil) { injectedRequest = request }
+    func countryCodeToFlag(_ code: String) -> String { NativeDiagnostics.countryFlag(code) }
 
     /// 读取 macOS 系统当前代理配置 (`scutil --proxy`)
     func getSystemProxyInfo() -> SystemProxyInfo {
         let output = runProcess(executable: "/usr/sbin/scutil", arguments: ["--proxy"], timeout: 3.0)
+        guard !output.isEmpty else {
+            return SystemProxyInfo(enabled: false, httpProxy: nil, socksProxy: nil,
+                                   summary: "系统代理配置读取失败（状态未知）", status: "error")
+        }
         var httpEnable = false
         var httpHost = ""
         var httpPort = ""
@@ -126,7 +381,7 @@ class NetworkDetector {
             let key = parts[0].trimmingCharacters(in: .whitespaces)
             let val = parts[1].trimmingCharacters(in: .whitespaces)
             switch key {
-            case "HTTPEnable": httpEnable = (val == "1")
+            case "HTTPEnable", "HTTPSEnable": httpEnable = httpEnable || (val == "1")
             case "HTTPProxy": httpHost = val
             case "HTTPPort": httpPort = val
             case "HTTPSProxy": if httpHost.isEmpty { httpHost = val }
@@ -152,7 +407,7 @@ class NetworkDetector {
         } else if let sp = socksProxyStr {
             return SystemProxyInfo(enabled: true, httpProxy: nil, socksProxy: sp, summary: "SOCKS代理 (\(socksHost):\(socksPort))")
         } else {
-            return SystemProxyInfo(enabled: false, httpProxy: nil, socksProxy: nil, summary: "系统直连 / TUN 模式")
+            return SystemProxyInfo(enabled: false, httpProxy: nil, socksProxy: nil, summary: "未发现显式系统代理（仍可能受 TUN 影响）")
         }
     }
 
@@ -182,581 +437,197 @@ class NetworkDetector {
         }
     }
 
-    /// 执行外部命令并返回标准输出
-    private func runProcess(executable: String, arguments: [String], timeout: TimeInterval = 8.0) -> String {
+    /// File-backed output avoids a full stdout pipe deadlocking while the process runs.
+    private func execute(executable: String, arguments: [String], timeout: TimeInterval) -> (output: String, error: String) {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("claude-probe-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: file.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              let output = try? FileHandle(forWritingTo: file) else { return ("", "output_file_failed") }
+        defer { try? output.close(); try? FileManager.default.removeItem(at: file) }
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        let semaphore = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in
-            semaphore.signal()
+        process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+        process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        let completed = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in completed.signal() }
+        do { try process.run() } catch { return ("", "process_start_failed") }
+        if completed.wait(timeout: .now() + timeout) == .timedOut {
+            if process.isRunning { process.terminate() }
+            if completed.wait(timeout: .now() + 1) == .timedOut, process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            return ("", "timeout")
         }
-
-        do {
-            try process.run()
-        } catch {
-            return ""
-        }
-
-        let waitResult = semaphore.wait(timeout: .now() + timeout)
-        if waitResult == .timedOut {
-            process.terminate()
-            return ""
-        }
-
-        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
-        return String(data: data, encoding: .utf8) ?? ""
+        let data = (try? Data(contentsOf: file)) ?? Data()
+        return (String(data: data, encoding: .utf8) ?? "", process.terminationStatus == 0 ? "" : "process_exit_\(process.terminationStatus)")
     }
 
-    /// 使用 curl 执行 HTTP GET 请求
-    private func curlGet(url: String, extraArgs: [String] = [], timeout: Int = 6) -> String {
-        var args = [
-            "-s", "-L",
-            "--max-time", "\(timeout)",
-            "--connect-timeout", "4",
-            "-A", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-        ]
-        args.append(contentsOf: extraArgs)
-        args.append(url)
-        return runProcess(executable: "/usr/bin/curl", arguments: args, timeout: TimeInterval(timeout + 2))
+    private func runProcess(executable: String, arguments: [String], timeout: TimeInterval = 8) -> String {
+        let result = execute(executable: executable, arguments: arguments, timeout: timeout)
+        return result.error.isEmpty ? result.output : ""
     }
 
-    // MARK: - 1. 检测中国出口 IPv4
+    private func request(_ url: String, proxyArgs: [String], timeout: Int = 6, followRedirects: Bool = true) -> NativeHTTPResponse {
+        if let injectedRequest { return injectedRequest(url, proxyArgs, timeout, followRedirects) }
+        let marker = "\n__CLAUDE_HTTP_\(UUID().uuidString)__"
+        var args = ["-s", "--max-time", "\(timeout)", "--connect-timeout", "4", "--max-filesize", "4194304",
+                    "--proto", "=http,https", "--proto-redir", "=https", "--max-redirs", "5",
+                    "-A", "Claude-IP-Checker", "-w", marker + "%{http_code}|%{time_total}|%{url_effective}"]
+        if followRedirects { args.append("-L") }
+        args += proxyArgs; args.append(url)
+        let result = execute(executable: "/usr/bin/curl", arguments: args, timeout: TimeInterval(timeout + 2))
+        guard let range = result.output.range(of: marker, options: .backwards) else {
+            return NativeHTTPResponse(error: result.error.isEmpty ? "invalid_transport_response" : result.error)
+        }
+        let fields = result.output[range.upperBound...].components(separatedBy: "|")
+        let seconds = fields.count > 1 ? (Double(fields[1]) ?? 0) : 0
+        return NativeHTTPResponse(body: String(result.output[..<range.lowerBound]),
+                                  statusCode: Int(fields.first ?? "") ?? 0,
+                                  latencyMs: seconds.isFinite ? Int(max(0, min(seconds, 86_400)) * 1000) : 0,
+                                  error: result.error, effectiveURL: fields.count > 2 ? fields[2] : "")
+    }
+
+    private func card(ip: String, countryCode: String, location: String, source: String) -> ExitIPCardData {
+        ExitIPCardData(ip: ip, countryCode: countryCode, flag: NativeDiagnostics.countryFlag(countryCode),
+                       locationText: location.isEmpty ? "地区未知" : location, isIPv6: ip.contains(":"), success: true,
+                       source: source, observedAt: NativeDiagnostics.timestamp())
+    }
+
+    private func failedCard(_ source: String) -> ExitIPCardData {
+        ExitIPCardData(ip: "获取失败", countryCode: "", flag: "🌐", locationText: "未取得出口证据",
+                       isIPv6: false, success: false, source: source, observedAt: NativeDiagnostics.timestamp())
+    }
+
     func detectChinaIPv4() -> ExitIPCardData {
-        // 强制绕过代理并优先使用 IPv4
-        let directArgs = ["--noproxy", "*", "-4"]
-
-        // 渠道 1：myip.ipip.net/json
-        let ipipRaw = curlGet(url: "https://myip.ipip.net/json", extraArgs: directArgs, timeout: 4)
-        if let data = ipipRaw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let inner = json["data"] as? [String: Any],
-           let ip = inner["ip"] as? String, !ip.isEmpty {
-            var locParts: [String] = []
-            if let locArr = inner["location"] as? [String] {
-                locParts = locArr.filter { !$0.isEmpty }
+        // This bypasses explicit curl proxies, not an OS-level TUN route.
+        let args = ["--noproxy", "*", "-4"]
+        let ipipURL = "https://myip.ipip.net/json"
+        let response = request(ipipURL, proxyArgs: args, timeout: 4)
+        if let json = NativeDiagnostics.json(response), let data = json["data"] as? [String: Any],
+           let ip = NativeDiagnostics.normalizedIP(data["ip"] as? String ?? ""), !ip.contains(":") {
+            let geo = fetchBasicIPGeo(ip: ip, proxyArgs: args)
+            let location = (data["location"] as? [String] ?? []).filter { !$0.isEmpty }.joined(separator: " ")
+            return card(ip: ip, countryCode: geo.countryCode, location: geo.summary.isEmpty ? location : geo.summary,
+                        source: response.effectiveURL.isEmpty ? ipipURL : response.effectiveURL)
+        }
+        for url in ["https://4.ipw.cn", "https://ip.3322.net"] {
+            let response = request(url, proxyArgs: args, timeout: 4)
+            if response.succeeded, let ip = NativeDiagnostics.normalizedIP(response.body), !ip.contains(":") {
+                let geo = fetchBasicIPGeo(ip: ip, proxyArgs: args)
+                return card(ip: ip, countryCode: geo.countryCode, location: geo.summary, source: response.effectiveURL.isEmpty ? url : response.effectiveURL)
             }
-            let locText = locParts.isEmpty ? "China" : locParts.joined(separator: " ")
-            return ExitIPCardData(
-                ip: ip,
-                countryCode: "CN",
-                flag: countryCodeToFlag("CN"),
-                locationText: locText,
-                isIPv6: ip.contains(":"),
-                success: true
-            )
         }
-
-        // 渠道 2：4.ipw.cn 或 ip.3322.net 获取纯 IPv4，再查询归属地
-        var fallbackIP = curlGet(url: "https://4.ipw.cn", extraArgs: directArgs, timeout: 4)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if fallbackIP.isEmpty || fallbackIP.count > 45 || fallbackIP.contains("<") {
-            fallbackIP = curlGet(url: "https://ip.3322.net", extraArgs: directArgs, timeout: 4)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        if !fallbackIP.isEmpty && !fallbackIP.contains("<") {
-            let detail = fetchBasicIPGeo(ip: fallbackIP, proxyArgs: directArgs)
-            return ExitIPCardData(
-                ip: fallbackIP,
-                countryCode: detail.countryCode.isEmpty ? "CN" : detail.countryCode,
-                flag: countryCodeToFlag(detail.countryCode.isEmpty ? "CN" : detail.countryCode),
-                locationText: detail.summary.isEmpty ? "China" : detail.summary,
-                isIPv6: fallbackIP.contains(":"),
-                success: true
-            )
-        }
-
-        return ExitIPCardData(
-            ip: "获取失败",
-            countryCode: "",
-            flag: "🌐",
-            locationText: "请检查国内网络连通性",
-            isIPv6: false,
-            success: false
-        )
+        return failedCard("未使用显式代理的 IPv4 请求")
     }
 
-    // MARK: - 2. 检测 Cloudflare 出口 IP
     func detectCloudflareIP(proxyMode: String, customProxy: String) -> ExitIPCardData {
-        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
-
-        var traceRaw = curlGet(url: "https://1.1.1.1/cdn-cgi/trace", extraArgs: proxyArgs, timeout: 5)
-        if !traceRaw.contains("ip=") {
-            traceRaw = curlGet(url: "https://www.cloudflare.com/cdn-cgi/trace", extraArgs: proxyArgs, timeout: 5)
-        }
-
-        var ip = ""
-        var loc = ""
-        for line in traceRaw.components(separatedBy: .newlines) {
-            if line.hasPrefix("ip=") {
-                ip = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("loc=") {
-                loc = String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces)
+        let args = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        for url in ["https://1.1.1.1/cdn-cgi/trace", "https://www.cloudflare.com/cdn-cgi/trace"] {
+            let response = request(url, proxyArgs: args, timeout: 5)
+            if let trace = NativeDiagnostics.trace(response) {
+                let geo = fetchBasicIPGeo(ip: trace.ip, proxyArgs: args)
+                let cc = geo.countryCode.isEmpty ? trace.countryCode : geo.countryCode
+                return card(ip: trace.ip, countryCode: cc, location: geo.summary.isEmpty ? cc : geo.summary,
+                            source: response.effectiveURL.isEmpty ? url : response.effectiveURL)
             }
         }
-
-        if !ip.isEmpty {
-            let geo = fetchBasicIPGeo(ip: ip, proxyArgs: proxyArgs)
-            let code = geo.countryCode.isEmpty ? loc : geo.countryCode
-            let text = geo.summary.isEmpty ? code : geo.summary
-            return ExitIPCardData(
-                ip: ip,
-                countryCode: code,
-                flag: countryCodeToFlag(code),
-                locationText: text,
-                isIPv6: ip.contains(":"),
-                success: true
-            )
-        }
-
-        return ExitIPCardData(
-            ip: "获取失败",
-            countryCode: "",
-            flag: "🌐",
-            locationText: "无法连接 Cloudflare 节点",
-            isIPv6: false,
-            success: false
-        )
+        return failedCard("https://www.cloudflare.com/cdn-cgi/trace")
     }
 
-    // MARK: - 3. 检测 Claude AI 出口 IP 及完整风控评分
     func detectClaudeIPAndRisk(proxyMode: String, customProxy: String) -> ClaudeRiskData {
-        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
-
-        // 第一步：优先通过 claude.ai/cdn-cgi/trace 获取真实针对 claude.ai 分流后的出口 IP
-        var claudeIP = ""
-        let claudeTrace = curlGet(url: "https://claude.ai/cdn-cgi/trace", extraArgs: proxyArgs, timeout: 5)
-        for line in claudeTrace.components(separatedBy: .newlines) {
-            if line.hasPrefix("ip=") {
-                claudeIP = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
-                break
+        let args = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        let traceURL = "https://claude.ai/cdn-cgi/trace"
+        let traceResponse = request(traceURL, proxyArgs: args, timeout: 5)
+        var ip = "", source = "", verified = false
+        if let trace = NativeDiagnostics.trace(traceResponse) {
+            ip = trace.ip
+            source = traceResponse.effectiveURL.isEmpty ? traceURL : traceResponse.effectiveURL
+            // A cross-host redirect proves the redirect destination's route, not claude.ai's.
+            let endpoint = URL(string: source)
+            verified = endpoint?.scheme?.lowercased() == "https" && endpoint?.host?.lowercased() == "claude.ai"
+                && endpoint?.path == "/cdn-cgi/trace"
+        }
+        if ip.isEmpty {
+            let url = "https://api64.ipify.org"
+            let response = request(url, proxyArgs: args, timeout: 5)
+            if response.succeeded, let candidate = NativeDiagnostics.normalizedIP(response.body) {
+                ip = candidate; source = response.effectiveURL.isEmpty ? url : response.effectiveURL
             }
         }
-
-        // 若 claude.ai/cdn-cgi/trace 未返回，则尝试 api.ipify.org 或 ipwho.is
-        if claudeIP.isEmpty {
-            let ipify = curlGet(url: "https://api64.ipify.org", extraArgs: proxyArgs, timeout: 5)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if !ipify.isEmpty && !ipify.contains("<") && ipify.count <= 45 {
-                claudeIP = ipify
+        var whoResponse: NativeHTTPResponse?
+        if ip.isEmpty {
+            let url = "https://ipwho.is/"
+            let response = request(url, proxyArgs: args, timeout: 5)
+            if let json = NativeDiagnostics.json(response), NativeDiagnostics.strictBool(json["success"]) == true,
+               let candidate = NativeDiagnostics.normalizedIP(json["ip"] as? String ?? "") {
+                ip = candidate; source = response.effectiveURL.isEmpty ? url : response.effectiveURL; whoResponse = response
             }
         }
-
-        // 第二步：聚合查询该 IP 的归属地、ASN、Hosting/Proxy/VPN 属性
-        var country = "未知"
-        var countryCode = ""
-        var city = "未知"
-        var region = ""
-        var asn = "未知"
-        var isp = "未知"
-        var org = ""
-        var timezone = "未知"
-        var isHosting = false
-        var isMobile = false
-        var isProxy = false
-        var isVPN = false
-        var isTor = false
-        var isCrawler = false
-        var isAbuse = false
-
-        // 情报源 A：ip-api.com（包含极其准确的 hosting / proxy / mobile 布尔字段）
-        let ipApiUrl = claudeIP.isEmpty
-            ? "http://ip-api.com/json/?fields=66846719"
-            : "http://ip-api.com/json/\(claudeIP)?fields=66846719"
-        let ipApiRaw = curlGet(url: ipApiUrl, extraArgs: proxyArgs, timeout: 5)
-        if let data = ipApiRaw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           (json["status"] as? String) == "success" {
-            if claudeIP.isEmpty, let q = json["query"] as? String { claudeIP = q }
-            if let c = json["country"] as? String, !c.isEmpty { country = c }
-            if let cc = json["countryCode"] as? String, !cc.isEmpty { countryCode = cc }
-            if let ct = json["city"] as? String, !ct.isEmpty { city = ct }
-            if let rg = json["regionName"] as? String, !rg.isEmpty { region = rg }
-            if let tz = json["timezone"] as? String, !tz.isEmpty { timezone = tz }
-            if let sp = json["isp"] as? String, !sp.isEmpty { isp = sp }
-            if let og = json["org"] as? String, !og.isEmpty { org = og }
-            if let asStr = json["as"] as? String, !asStr.isEmpty {
-                let firstToken = asStr.components(separatedBy: " ").first ?? asStr
-                asn = firstToken
-            }
-            if let h = json["hosting"] as? Bool { isHosting = h }
-            if let m = json["mobile"] as? Bool { isMobile = m }
-            if let p = json["proxy"] as? Bool { isProxy = p }
+        guard !ip.isEmpty else {
+            return NativeDiagnostics.risk(ip: "", source: "", verified: false, ipAPI: NativeHTTPResponse(), ipWho: NativeHTTPResponse())
         }
-
-        // 情报源 B：ipwho.is（补充 HTTPS 下的 ASN、ISP、Security 信息）
-        let ipWhoUrl = claudeIP.isEmpty ? "https://ipwho.is/" : "https://ipwho.is/\(claudeIP)"
-        let ipWhoRaw = curlGet(url: ipWhoUrl, extraArgs: proxyArgs, timeout: 5)
-        if let data = ipWhoRaw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           (json["success"] as? Bool) == true {
-            if claudeIP.isEmpty, let q = json["ip"] as? String { claudeIP = q }
-            if country == "未知", let c = json["country"] as? String, !c.isEmpty { country = c }
-            if countryCode.isEmpty, let cc = json["country_code"] as? String, !cc.isEmpty { countryCode = cc }
-            if city == "未知", let ct = json["city"] as? String, !ct.isEmpty { city = ct }
-            if region.isEmpty, let rg = json["region"] as? String, !rg.isEmpty { region = rg }
-            if let tzObj = json["timezone"] as? [String: Any],
-               let tzId = tzObj["id"] as? String, timezone == "未知" && !tzId.isEmpty {
-                timezone = tzId
-            }
-            if let conn = json["connection"] as? [String: Any] {
-                if asn == "未知", let asnNum = conn["asn"] as? Int {
-                    asn = "AS\(asnNum)"
-                }
-                if isp == "未知", let sp = conn["isp"] as? String, !sp.isEmpty {
-                    isp = sp
-                }
-                if org.isEmpty, let og = conn["org"] as? String, !og.isEmpty {
-                    org = og
-                }
-            }
-            if let sec = json["security"] as? [String: Any] {
-                if let h = sec["hosting"] as? Bool, h { isHosting = true }
-                if let p = sec["proxy"] as? Bool, p { isProxy = true }
-                if let v = sec["vpn"] as? Bool, v { isVPN = true }
-                if let t = sec["tor"] as? Bool, t { isTor = true }
-                if let c = sec["crawler"] as? Bool, c { isCrawler = true }
-            }
-        }
-
-        guard !claudeIP.isEmpty else {
-            return ClaudeRiskData(
-                ip: "获取失败",
-                isIPv6: false,
-                country: "未知",
-                countryCode: "",
-                flag: "🌐",
-                city: "未知",
-                region: "",
-                asn: "未知",
-                isp: "未知",
-                org: "",
-                timezone: "未知",
-                ipType: "未知",
-                ipTypeEn: "",
-                isHosting: false,
-                trustScore: 0,
-                trustLevel: "无数据",
-                trustDesc: "未获取到 Claude AI 出口 IP，请检查代理或网络配置",
-                regionSupported: false,
-                regionStatusText: "未知",
-                vpnDetected: false,
-                proxyDetected: false,
-                torDetected: false,
-                crawlerDetected: false,
-                abuseDetected: false,
-                success: false
-            )
-        }
-
-        // 第三步：结合 ASN / ISP 关键词二次校准是否为机房 IP (Hosting)
-        let combinedProvider = "\(isp) \(org) \(asn)".lowercased()
-        if !isHosting {
-            for kw in hostingKeywords {
-                if combinedProvider.contains(kw) {
-                    isHosting = true
-                    break
-                }
-            }
-        }
-
-        // 若 ip-api 标记了 proxy=true，但该 IP 属于知名云厂商机房且未明确标记 Tor，归类为机房节点并区分公开代理
-        if isProxy && isHosting && (combinedProvider.contains("google") || combinedProvider.contains("amazon") || combinedProvider.contains("microsoft") || combinedProvider.contains("cloudflare") || combinedProvider.contains("oracle")) {
-            // 知名大厂云机房默认按纯净机房 IP 评估，不重复扣公开脏代理分
-            isProxy = false
-        }
-
-        // 判断 IP 属性展示文本
-        let ipType: String
-        let ipTypeEn: String
-        if isHosting {
-            ipType = "机房IP"
-            ipTypeEn = "(Hosting)"
-        } else if isMobile {
-            ipType = "移动网络"
-            ipTypeEn = "(Mobile)"
-        } else {
-            ipType = "住宅IP"
-            ipTypeEn = "(Residential)"
-        }
-
-        // 判断 Claude 地区支持状态
-        let upperCC = countryCode.uppercased()
-        let regionSupported = !upperCC.isEmpty && !unsupportedCountryCodes.contains(upperCC)
-        let regionStatusText = regionSupported ? "正常" : "不支持"
-
-        // 第四步：计算 Claude AI 信任评分 (0 - 100)，与 ip.net.coffee 评分体系完全对齐
-        var score = 100
-        if isHosting {
-            score -= 11 // 纯净机房 IP 得 89 分（如 Google LLC / AWS 节点显示 89 纯净）
-        }
-        if isVPN {
-            score -= 15
-        }
-        if isProxy {
-            score -= 22
-        }
-        if isTor {
-            score -= 45
-            isAbuse = true
-        }
-        if isCrawler {
-            score -= 20
-        }
-        if !regionSupported {
-            score -= 25
-        }
-        if claudeIP.contains(":") {
-            // IPv6 出口略微降权提醒
-            score -= 5
-        }
-        score = max(5, min(100, score))
-
-        let trustLevel: String
-        let trustDesc: String
-        if score >= 80 {
-            trustLevel = "纯净"
-            trustDesc = "该 IP 信誉优异"
-        } else if score >= 65 {
-            trustLevel = "低风险"
-            trustDesc = "该 IP 信誉良好，可正常使用"
-        } else if score >= 45 {
-            trustLevel = "中风险"
-            trustDesc = "该 IP 存在共享或风控记录，建议留意"
-        } else {
-            trustLevel = "高危"
-            trustDesc = "该 IP 风险较高，极易触发 Claude 封禁或拦截"
-        }
-
-        return ClaudeRiskData(
-            ip: claudeIP,
-            isIPv6: claudeIP.contains(":"),
-            country: country,
-            countryCode: upperCC,
-            flag: countryCodeToFlag(upperCC),
-            city: city,
-            region: region,
-            asn: asn,
-            isp: isp,
-            org: org,
-            timezone: timezone,
-            ipType: ipType,
-            ipTypeEn: ipTypeEn,
-            isHosting: isHosting,
-            trustScore: score,
-            trustLevel: trustLevel,
-            trustDesc: trustDesc,
-            regionSupported: regionSupported,
-            regionStatusText: regionStatusText,
-            vpnDetected: isVPN,
-            proxyDetected: isProxy,
-            torDetected: isTor,
-            crawlerDetected: isCrawler,
-            abuseDetected: isAbuse,
-            success: true
-        )
+        let api = request("http://ip-api.com/json/\(ip)?fields=status,query,country,countryCode,regionName,city,as,isp,org,timezone,hosting,proxy,mobile", proxyArgs: args, timeout: 5)
+        let who = whoResponse ?? request("https://ipwho.is/\(ip)", proxyArgs: args, timeout: 5)
+        return NativeDiagnostics.risk(ip: ip, source: source, verified: verified, ipAPI: api, ipWho: who)
     }
 
-    // MARK: - 4. 检测 Claude 域名可用性与真实延迟
     func detectClaudeAvailability(proxyMode: String, customProxy: String) -> [EndpointPingResult] {
-        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
-        let domains = ["claude.ai", "anthropic.com"]
-        var results: [EndpointPingResult] = []
-        let group = DispatchGroup()
-        let lock = NSLock()
-
-        for domain in domains {
-            group.enter()
-            DispatchQueue.global(qos: .userInitiated).async {
-                let res = self.measureDomainLatency(domain: domain, proxyArgs: proxyArgs)
-                lock.lock()
-                results.append(res)
-                lock.unlock()
-                group.leave()
-            }
-        }
-        group.wait()
-
-        // 保持固定顺序：claude.ai 在前，anthropic.com 在后
-        return domains.compactMap { d in results.first(where: { $0.domain == d }) }
-    }
-
-    private func measureDomainLatency(domain: String, proxyArgs: [String]) -> EndpointPingResult {
-        var args = [
-            "-o", "/dev/null",
-            "-s",
-            "--max-time", "6",
-            "--connect-timeout", "4",
-            "-w", "%{http_code}|%{time_appconnect}|%{time_total}",
-            "https://\(domain)"
-        ]
-        args.insert(contentsOf: proxyArgs, at: 0)
-
-        let start = Date()
-        let out = runProcess(executable: "/usr/bin/curl", arguments: args, timeout: 7.0)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
-
-        let parts = out.components(separatedBy: "|")
-        let code = Int(parts.first ?? "0") ?? 0
-        var latency = elapsedMs
-        if parts.count >= 2, let tlsSec = Double(parts[1]), tlsSec > 0.001 {
-            latency = Int(tlsSec * 1000)
-        } else if parts.count >= 3, let totalSec = Double(parts[2]), totalSec > 0.001 {
-            latency = Int(totalSec * 1000)
-        }
-
-        if code > 0 && code != 000 {
-            return EndpointPingResult(
-                domain: domain,
-                reachable: true,
-                latencyMs: max(1, latency),
-                statusCode: code,
-                statusText: "正常"
-            )
-        } else {
-            return EndpointPingResult(
-                domain: domain,
-                reachable: false,
-                latencyMs: 0,
-                statusCode: 0,
-                statusText: "连接失败"
-            )
+        let args = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        return ["claude.ai", "anthropic.com"].map { domain in
+            // Do not follow redirects: preserve the endpoint's measured HTTP response.
+            NativeDiagnostics.endpoint(domain: domain, response: request("https://\(domain)", proxyArgs: args, timeout: 6, followRedirects: false))
         }
     }
 
-    // MARK: - 5. 检测 DNS 泄露
     func detectDNSLeak(proxyMode: String, customProxy: String, claudeCountryCode: String) -> DNSLeakResult {
-        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
-
-        // 使用 ip-api 官方的 EDNS 递归解析器探测接口
-        let randomId = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
-        let ednsUrl = "http://\(randomId).edns.ip-api.com/json"
-        let raw = curlGet(url: ednsUrl, extraArgs: proxyArgs, timeout: 5)
-
-        if let data = raw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let dnsObj = json["dns"] as? [String: Any] {
-            let dnsIP = (dnsObj["ip"] as? String) ?? "未知"
-            let dnsGeo = (dnsObj["geo"] as? String) ?? "未知"
-
-            // 判断是否存在 DNS 泄露：如果 Claude 出口在海外，但递归 DNS 出口在中国大陆，则判定为泄露
-            let isChinaDNS = dnsGeo.lowercased().contains("china")
-            let isOverseasClaude = !claudeCountryCode.isEmpty && claudeCountryCode != "CN"
-            let leaked = isChinaDNS && isOverseasClaude
-
-            return DNSLeakResult(
-                leaked: leaked,
-                statusText: leaked ? "检测到国内DNS泄露" : "未检测到泄露",
-                dnsIP: dnsIP,
-                dnsGeo: dnsGeo
-            )
-        }
-
-        return DNSLeakResult(
-            leaked: false,
-            statusText: "未检测到泄露",
-            dnsIP: "加密 DNS / DoH",
-            dnsGeo: "Cloudflare / 安全解析"
-        )
+        let args = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        let id = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
+        let url = "http://\(id).edns.ip-api.com/json"
+        let response = request(url, proxyArgs: args, timeout: 5)
+        return NativeDiagnostics.dns(response: response, source: response.effectiveURL.isEmpty ? url : response.effectiveURL,
+                                     exitCountry: claudeCountryCode)
     }
 
-    // MARK: - 辅助：查询任意 IP 的简要地理与 ISP 信息
     private func fetchBasicIPGeo(ip: String, proxyArgs: [String]) -> (countryCode: String, summary: String) {
-        let raw = curlGet(url: "http://ip-api.com/json/\(ip)?fields=status,country,countryCode,regionName,city,isp", extraArgs: proxyArgs, timeout: 4)
-        if let data = raw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           (json["status"] as? String) == "success" {
-            let cc = (json["countryCode"] as? String) ?? ""
-            let country = (json["country"] as? String) ?? ""
-            let region = (json["regionName"] as? String) ?? ""
-            let city = (json["city"] as? String) ?? ""
-            let isp = (json["isp"] as? String) ?? ""
-            var parts: [String] = []
-            for item in [country, region, city, isp] where !item.isEmpty {
-                if !parts.contains(item) {
-                    parts.append(item)
-                }
-            }
-            return (cc, parts.joined(separator: " "))
+        guard let valid = NativeDiagnostics.normalizedIP(ip) else { return ("", "") }
+        let response = request("https://ipwho.is/\(valid)", proxyArgs: proxyArgs, timeout: 4)
+        guard let json = NativeDiagnostics.json(response), NativeDiagnostics.strictBool(json["success"]) == true,
+              NativeDiagnostics.normalizedIP(json["ip"] as? String ?? "") == valid else { return ("", "") }
+        let cc = NativeDiagnostics.countryCode(json["country_code"] as? String ?? "")
+        var parts: [String] = []
+        for key in ["country", "region", "city"] {
+            if let text = json[key] as? String, !text.isEmpty, !parts.contains(text) { parts.append(text) }
         }
-        return ("", "")
+        return (cc, parts.joined(separator: " "))
     }
 
-    // MARK: - 6. 检查 GitHub Release 最新版本
     func checkAppUpdate(currentVersion: String, proxyMode: String, customProxy: String) -> UpdateCheckResult {
-        let proxyArgs = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
+        let args = buildCurlProxyArgs(proxyMode: proxyMode, customProxy: customProxy)
         let apiURL = "https://api.github.com/repos/245678000000/claude-ip-checker/releases/latest"
-
-        var raw = curlGet(url: apiURL, extraArgs: proxyArgs, timeout: 6)
-        if !raw.contains("tag_name") {
-            // 若当前代理失败则尝试直连回退
-            raw = curlGet(url: apiURL, extraArgs: ["--noproxy", "*"], timeout: 5)
+        let releases = "https://github.com/245678000000/claude-ip-checker/releases"
+        var response = request(apiURL, proxyArgs: args, timeout: 6)
+        if NativeDiagnostics.json(response)?["tag_name"] == nil { response = request(apiURL, proxyArgs: ["--noproxy", "*"], timeout: 5) }
+        guard let json = NativeDiagnostics.json(response), let tag = json["tag_name"] as? String,
+              let latest = versionParts(tag), let current = versionParts(currentVersion) else {
+            return UpdateCheckResult(currentVersion: currentVersion, latestVersion: currentVersion, hasUpdate: false,
+                                     releaseURL: releases, downloadURL: "", releaseNotes: "", errorMsg: "版本检查失败，请稍后重试")
         }
-
-        guard let data = raw.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tagName = json["tag_name"] as? String else {
-            return UpdateCheckResult(
-                currentVersion: currentVersion,
-                latestVersion: currentVersion,
-                hasUpdate: false,
-                releaseURL: "https://github.com/245678000000/claude-ip-checker/releases",
-                downloadURL: "",
-                releaseNotes: "",
-                errorMsg: "无法连接 GitHub 检查更新，请检查网络或代理设置"
-            )
-        }
-
-        let cleanCurrent = currentVersion.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        let cleanLatest = tagName.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
-        let hasUpdate = compareVersions(cleanLatest, isGreaterThan: cleanCurrent)
-
-        let htmlURL = (json["html_url"] as? String) ?? "https://github.com/245678000000/claude-ip-checker/releases"
-        let body = (json["body"] as? String) ?? "包含性能优化与风控规则更新。"
-
-        var macDownloadURL = htmlURL
-        if let assets = json["assets"] as? [[String: Any]] {
-            for asset in assets {
-                if let name = asset["name"] as? String,
-                   let dl = asset["browser_download_url"] as? String,
-                   name.lowercased().contains("macos") {
-                    macDownloadURL = dl
-                    break
-                }
+        let newer = current.lexicographicallyPrecedes(latest)
+        let page = NativeBridgePolicy.externalURL(json["html_url"] as? String ?? "")?.absoluteString ?? releases
+        var download = page
+        for asset in json["assets"] as? [[String: Any]] ?? [] {
+            if (asset["name"] as? String ?? "").lowercased().contains("macos"),
+               let url = NativeBridgePolicy.externalURL(asset["browser_download_url"] as? String ?? "") {
+                download = url.absoluteString; break
             }
         }
-
-        return UpdateCheckResult(
-            currentVersion: "v\(cleanCurrent)",
-            latestVersion: "v\(cleanLatest)",
-            hasUpdate: hasUpdate,
-            releaseURL: htmlURL,
-            downloadURL: macDownloadURL,
-            releaseNotes: body,
-            errorMsg: ""
-        )
+        return UpdateCheckResult(currentVersion: currentVersion, latestVersion: tag, hasUpdate: newer,
+                                 releaseURL: page, downloadURL: download, releaseNotes: json["body"] as? String ?? "", errorMsg: "")
     }
 
-    /// 语义化版本号对比 (如 "1.2.0" > "1.1.0")
-    private func compareVersions(_ v1: String, isGreaterThan v2: String) -> Bool {
-        let parts1 = v1.components(separatedBy: ".").compactMap { Int($0) }
-        let parts2 = v2.components(separatedBy: ".").compactMap { Int($0) }
-        let maxCount = max(parts1.count, parts2.count)
-        for i in 0..<maxCount {
-            let n1 = i < parts1.count ? parts1[i] : 0
-            let n2 = i < parts2.count ? parts2[i] : 0
-            if n1 != n2 {
-                return n1 > n2
-            }
-        }
-        return false
+    private func versionParts(_ version: String) -> [Int]? {
+        var text = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("v") || text.hasPrefix("V") { text.removeFirst() }
+        let pieces = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard pieces.count == 3 else { return nil }
+        let values = pieces.compactMap { Int($0) }
+        guard values.count == 3, values.allSatisfy({ $0 >= 0 }) else { return nil }
+        return values
     }
 }

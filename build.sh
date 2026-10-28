@@ -5,6 +5,8 @@ SCRIPT_DIR="${0:A:h}"
 cd "$SCRIPT_DIR"
 
 APP_NAME="Claude IP 检测"
+VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/VERSION")"
+if ! grep -Fq "const APP_VERSION = '$VERSION';" "$SCRIPT_DIR/Resources/app.js"; then echo "Version mismatch in app.js"; exit 1; fi
 EXEC_NAME="ClaudeIPChecker"
 BUILD_DIR="$SCRIPT_DIR/build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
@@ -48,7 +50,7 @@ swiftc -O -target arm64-apple-macosx14.0 -module-cache-path /tmp/clang-module-ca
   -o "$MACOS_DIR/$EXEC_NAME"
 
 echo "==> 拷贝内置 UI 资源..."
-cp "$SCRIPT_DIR/Resources/index.html" "$RESOURCES_DIR/index.html"
+cp "$SCRIPT_DIR/Resources/"*.html "$SCRIPT_DIR/Resources/"*.js "$RESOURCES_DIR/"
 
 echo "==> 生成 Info.plist..."
 cat > "$CONTENTS_DIR/Info.plist" <<EOF
@@ -73,11 +75,11 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.1.0</string>
+    <string>$VERSION</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>3</string>
     <key>LSMinimumSystemVersion</key>
-    <string>12.0</string>
+    <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSAppTransportSecurity</key>
@@ -92,19 +94,19 @@ EOF
 echo "==> 执行本地 Ad-hoc 签名..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
-echo "==> 交叉编译 Windows 原生单文件客户端 (x64 & ARM64)..."
-export GOCACHE="/tmp/go-build-cache"
+echo "==> 交叉编译 Windows 原生单文件客户端 (x64)..."
+export GOCACHE="/tmp/claude-ip-go-cache"
 export GOPATH="/tmp/go-path"
 mkdir -p "$GOCACHE" "$GOPATH"
 
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 /opt/homebrew/bin/go build \
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
   -buildvcs=false \
   -ldflags="-H windowsgui -s -w" \
   -o "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" \
   "$SCRIPT_DIR"
 
-ditto -c -k "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" "$BUILD_DIR/Claude-IP-Checker-Windows-x64-v1.1.0.zip"
-ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/Claude-IP-Checker-macOS-v1.1.0.zip"
+ditto -c -k "$BUILD_DIR/Claude-IP-Checker-Windows-x64.exe" "$BUILD_DIR/Claude-IP-Checker-Windows-x64-v${VERSION}.zip"
+ditto -c -k --keepParent "$APP_BUNDLE" "$BUILD_DIR/Claude-IP-Checker-macOS-v${VERSION}.zip"
 
 echo "==> 构建完成:"
 echo "  - macOS:   $APP_BUNDLE"

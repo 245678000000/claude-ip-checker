@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-//go:embed Resources/index.html
+//go:embed Resources/* VERSION
 var embeddedFiles embed.FS
 
 // 系统代理信息结构体
@@ -34,6 +34,8 @@ type SystemProxyInfo struct {
 
 // 顶部出口 IP 简要卡片数据
 type ExitIPCardData struct {
+	Source       string `json:"source"`
+	ObservedAt   string `json:"observedAt"`
 	IP           string `json:"ip"`
 	CountryCode  string `json:"countryCode"`
 	Flag         string `json:"flag"`
@@ -44,35 +46,40 @@ type ExitIPCardData struct {
 
 // Claude 核心风险与属性完整数据
 type ClaudeRiskData struct {
-	IP               string `json:"ip"`
-	IsIPv6           bool   `json:"isIPv6"`
-	Country          string `json:"country"`
-	CountryCode      string `json:"countryCode"`
-	Flag             string `json:"flag"`
-	City             string `json:"city"`
-	Region           string `json:"region"`
-	ASN              string `json:"asn"`
-	ISP              string `json:"isp"`
-	Org              string `json:"org"`
-	Timezone         string `json:"timezone"`
-	IPType           string `json:"ipType"`
-	IPTypeEn         string `json:"ipTypeEn"`
-	IsHosting        bool   `json:"isHosting"`
-	TrustScore       int    `json:"trustScore"`
-	TrustLevel       string `json:"trustLevel"`
-	TrustDesc        string `json:"trustDesc"`
-	RegionSupported  bool   `json:"regionSupported"`
-	RegionStatusText string `json:"regionStatusText"`
-	VPNDetected      bool   `json:"vpnDetected"`
-	ProxyDetected    bool   `json:"proxyDetected"`
-	TorDetected      bool   `json:"torDetected"`
-	CrawlerDetected  bool   `json:"crawlerDetected"`
-	AbuseDetected    bool   `json:"abuseDetected"`
-	Success          bool   `json:"success"`
+	Signals          map[string]EvidenceSignal `json:"signals"`
+	ExitSource       string                    `json:"exitSource"`
+	ExitVerified     bool                      `json:"exitVerified"`
+	ObservedAt       string                    `json:"observedAt"`
+	IP               string                    `json:"ip"`
+	IsIPv6           bool                      `json:"isIPv6"`
+	Country          string                    `json:"country"`
+	CountryCode      string                    `json:"countryCode"`
+	Flag             string                    `json:"flag"`
+	City             string                    `json:"city"`
+	Region           string                    `json:"region"`
+	ASN              string                    `json:"asn"`
+	ISP              string                    `json:"isp"`
+	Org              string                    `json:"org"`
+	Timezone         string                    `json:"timezone"`
+	IPType           string                    `json:"ipType"`
+	IPTypeEn         string                    `json:"ipTypeEn"`
+	IsHosting        bool                      `json:"isHosting"`
+	TrustScore       int                       `json:"trustScore"`
+	TrustLevel       string                    `json:"trustLevel"`
+	TrustDesc        string                    `json:"trustDesc"`
+	RegionSupported  bool                      `json:"regionSupported"`
+	RegionStatusText string                    `json:"regionStatusText"`
+	VPNDetected      bool                      `json:"vpnDetected"`
+	ProxyDetected    bool                      `json:"proxyDetected"`
+	TorDetected      bool                      `json:"torDetected"`
+	CrawlerDetected  bool                      `json:"crawlerDetected"`
+	AbuseDetected    bool                      `json:"abuseDetected"`
+	Success          bool                      `json:"success"`
 }
 
 // 单个域名可用性测速结果
 type EndpointPingResult struct {
+	Status     string `json:"status"`
 	Domain     string `json:"domain"`
 	Reachable  bool   `json:"reachable"`
 	LatencyMs  int    `json:"latencyMs"`
@@ -82,6 +89,9 @@ type EndpointPingResult struct {
 
 // DNS 泄露检测结果
 type DNSLeakResult struct {
+	Status     string `json:"status"`
+	Source     string `json:"source"`
+	Error      string `json:"error"`
 	Leaked     bool   `json:"leaked"`
 	StatusText string `json:"statusText"`
 	DNSIP      string `json:"dnsIP"`
@@ -99,12 +109,6 @@ type UpdateCheckResult struct {
 	ErrorMsg       string `json:"errorMsg"`
 }
 
-var unsupportedCountryCodes = map[string]bool{
-	"CN": true, "HK": true, "MO": true, "RU": true, "BY": true,
-	"IR": true, "KP": true, "SY": true, "CU": true, "AF": true,
-	"VE": true, "MM": true, "SD": true,
-}
-
 var hostingKeywords = []string{
 	"google", "amazon", "aws", "cloudflare", "microsoft", "azure", "digitalocean",
 	"linode", "akamai", "vultr", "choopa", "hetzner", "ovh", "oracle", "alibaba",
@@ -118,7 +122,7 @@ var hostingKeywords = []string{
 // 将两位国家代码转换为国旗 Emoji
 func countryCodeToFlag(code string) string {
 	upper := strings.ToUpper(strings.TrimSpace(code))
-	if len(upper) != 2 {
+	if validCountryCode(upper) == "" {
 		return "🌐"
 	}
 	r1 := rune(upper[0]) - 'A' + 0x1F1E6
@@ -166,7 +170,7 @@ func getSystemProxyInfo() SystemProxyInfo {
 				return SystemProxyInfo{
 					Enabled:   true,
 					HTTPProxy: httpURL,
-					Summary:   fmt.Sprintf("系统代理 (%s)", cleanHost),
+					Summary:   fmt.Sprintf("系统代理 (%s)", proxyDisplay(httpURL)),
 				}
 			}
 		}
@@ -178,7 +182,7 @@ func getSystemProxyInfo() SystemProxyInfo {
 			return SystemProxyInfo{
 				Enabled:   true,
 				HTTPProxy: v,
-				Summary:   fmt.Sprintf("环境代理 (%s)", v),
+				Summary:   fmt.Sprintf("环境代理 (%s)", proxyDisplay(v)),
 			}
 		}
 	}
@@ -250,6 +254,9 @@ func httpGetString(client *http.Client, targetURL string) string {
 		return ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
 		return ""
@@ -257,7 +264,7 @@ func httpGetString(client *http.Client, targetURL string) string {
 	return string(body)
 }
 
-// 1. 检测中国出口 IPv4
+// 1. 不使用显式代理的 IPv4 探测；系统 TUN 路由仍可能生效
 func detectChinaIPv4() ExitIPCardData {
 	client := buildHTTPClient("direct", "", 5*time.Second, true)
 
@@ -270,21 +277,22 @@ func detectChinaIPv4() ExitIPCardData {
 				Location []string `json:"location"`
 			} `json:"data"`
 		}
-		if json.Unmarshal([]byte(raw), &parsed) == nil && parsed.Data.IP != "" {
+		if json.Unmarshal([]byte(raw), &parsed) == nil && validIP(parsed.Data.IP) != "" {
 			var parts []string
 			for _, item := range parsed.Data.Location {
 				if strings.TrimSpace(item) != "" {
 					parts = append(parts, strings.TrimSpace(item))
 				}
 			}
-			locText := "China"
+			locText := "归属地未知"
 			if len(parts) > 0 {
 				locText = strings.Join(parts, " ")
 			}
 			return ExitIPCardData{
-				IP:           parsed.Data.IP,
-				CountryCode:  "CN",
-				Flag:         countryCodeToFlag("CN"),
+				IP:     parsed.Data.IP,
+				Source: "https://myip.ipip.net/json", ObservedAt: time.Now().UTC().Format(time.RFC3339),
+				CountryCode:  "",
+				Flag:         countryCodeToFlag(""),
 				LocationText: locText,
 				IsIPv6:       strings.Contains(parsed.Data.IP, ":"),
 				Success:      true,
@@ -293,20 +301,20 @@ func detectChinaIPv4() ExitIPCardData {
 	}
 
 	// 渠道 2：4.ipw.cn 或 ip.3322.net
-	fallbackIP := strings.TrimSpace(httpGetString(client, "https://4.ipw.cn"))
-	if fallbackIP == "" || len(fallbackIP) > 45 || strings.Contains(fallbackIP, "<") {
-		fallbackIP = strings.TrimSpace(httpGetString(client, "https://ip.3322.net"))
+	source := "https://4.ipw.cn"
+	fallbackIP := validIP(httpGetString(client, source))
+	if fallbackIP == "" {
+		source = "https://ip.3322.net"
+		fallbackIP = validIP(httpGetString(client, source))
 	}
-	if fallbackIP != "" && !strings.Contains(fallbackIP, "<") {
+	if validIP(fallbackIP) != "" {
 		cc, summary := fetchBasicIPGeo(client, fallbackIP)
-		if cc == "" {
-			cc = "CN"
-		}
 		if summary == "" {
-			summary = "China"
+			summary = "归属地未知"
 		}
 		return ExitIPCardData{
-			IP:           fallbackIP,
+			IP:     fallbackIP,
+			Source: source, ObservedAt: time.Now().UTC().Format(time.RFC3339),
 			CountryCode:  cc,
 			Flag:         countryCodeToFlag(cc),
 			LocationText: summary,
@@ -329,9 +337,11 @@ func detectChinaIPv4() ExitIPCardData {
 func detectCloudflareIP(proxyMode, customProxy string) ExitIPCardData {
 	client := buildHTTPClient(proxyMode, customProxy, 6*time.Second, false)
 
-	traceRaw := httpGetString(client, "https://1.1.1.1/cdn-cgi/trace")
+	source := "https://1.1.1.1/cdn-cgi/trace"
+	traceRaw := httpGetString(client, source)
 	if !strings.Contains(traceRaw, "ip=") {
-		traceRaw = httpGetString(client, "https://www.cloudflare.com/cdn-cgi/trace")
+		source = "https://www.cloudflare.com/cdn-cgi/trace"
+		traceRaw = httpGetString(client, source)
 	}
 
 	ip := ""
@@ -339,7 +349,7 @@ func detectCloudflareIP(proxyMode, customProxy string) ExitIPCardData {
 	for _, line := range strings.Split(traceRaw, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "ip=") {
-			ip = strings.TrimPrefix(line, "ip=")
+			ip = validIP(strings.TrimPrefix(line, "ip="))
 		} else if strings.HasPrefix(line, "loc=") {
 			loc = strings.TrimPrefix(line, "loc=")
 		}
@@ -354,7 +364,8 @@ func detectCloudflareIP(proxyMode, customProxy string) ExitIPCardData {
 			summary = cc
 		}
 		return ExitIPCardData{
-			IP:           ip,
+			IP:     ip,
+			Source: source, ObservedAt: time.Now().UTC().Format(time.RFC3339),
 			CountryCode:  cc,
 			Flag:         countryCodeToFlag(cc),
 			LocationText: summary,
@@ -376,268 +387,38 @@ func detectCloudflareIP(proxyMode, customProxy string) ExitIPCardData {
 // 3. 检测 Claude AI 出口 IP 与完整风控评分
 func detectClaudeIPAndRisk(proxyMode, customProxy string) ClaudeRiskData {
 	client := buildHTTPClient(proxyMode, customProxy, 6*time.Second, false)
-
-	claudeIP := ""
-	traceRaw := httpGetString(client, "https://claude.ai/cdn-cgi/trace")
-	for _, line := range strings.Split(traceRaw, "\n") {
-		line = strings.TrimSpace(line)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse }
+	ip := ""
+	source := "claude.ai/cdn-cgi/trace"
+	verified := false
+	for _, line := range strings.Split(httpGetString(client, "https://claude.ai/cdn-cgi/trace"), "\n") {
 		if strings.HasPrefix(line, "ip=") {
-			claudeIP = strings.TrimPrefix(line, "ip=")
+			ip = validIP(strings.TrimPrefix(line, "ip="))
+			verified = ip != ""
 			break
 		}
 	}
-
-	if claudeIP == "" {
-		ipify := strings.TrimSpace(httpGetString(client, "https://api64.ipify.org"))
-		if ipify != "" && !strings.Contains(ipify, "<") && len(ipify) <= 45 {
-			claudeIP = ipify
-		}
+	if ip == "" {
+		ip = validIP(httpGetString(client, "https://api64.ipify.org"))
+		source = "api64.ipify.org (generic fallback)"
 	}
-
-	country := "未知"
-	countryCode := ""
-	city := "未知"
-	region := ""
-	asn := "未知"
-	isp := "未知"
-	org := ""
-	timezone := "未知"
-	isHosting := false
-	isMobile := false
-	isProxy := false
-	isVPN := false
-	isTor := false
-	isCrawler := false
-	isAbuse := false
-
-	// 情报源 A：ip-api.com
-	ipApiURL := "http://ip-api.com/json/?fields=66846719"
-	if claudeIP != "" {
-		ipApiURL = fmt.Sprintf("http://ip-api.com/json/%s?fields=66846719", claudeIP)
-	}
-	if raw := httpGetString(client, ipApiURL); raw != "" {
+	if ip == "" {
+		raw := httpGetString(client, "https://ipwho.is/")
 		var m map[string]any
-		if json.Unmarshal([]byte(raw), &m) == nil && m["status"] == "success" {
-			if claudeIP == "" {
-				if s, ok := m["query"].(string); ok {
-					claudeIP = s
-				}
-			}
-			if s, ok := m["country"].(string); ok && s != "" {
-				country = s
-			}
-			if s, ok := m["countryCode"].(string); ok && s != "" {
-				countryCode = s
-			}
-			if s, ok := m["city"].(string); ok && s != "" {
-				city = s
-			}
-			if s, ok := m["regionName"].(string); ok && s != "" {
-				region = s
-			}
-			if s, ok := m["timezone"].(string); ok && s != "" {
-				timezone = s
-			}
-			if s, ok := m["isp"].(string); ok && s != "" {
-				isp = s
-			}
-			if s, ok := m["org"].(string); ok && s != "" {
-				org = s
-			}
-			if s, ok := m["as"].(string); ok && s != "" {
-				asn = strings.Fields(s)[0]
-			}
-			if b, ok := m["hosting"].(bool); ok {
-				isHosting = b
-			}
-			if b, ok := m["mobile"].(bool); ok {
-				isMobile = b
-			}
-			if b, ok := m["proxy"].(bool); ok {
-				isProxy = b
+		_ = json.Unmarshal([]byte(raw), &m)
+		if m["success"] == true {
+			if candidate, ok := m["ip"].(string); ok {
+				ip = validIP(candidate)
+				source = "https://ipwho.is/ (generic fallback)"
 			}
 		}
 	}
-
-	// 情报源 B：ipwho.is
-	ipWhoURL := "https://ipwho.is/" + claudeIP
-	if raw := httpGetString(client, ipWhoURL); raw != "" {
-		var m map[string]any
-		if json.Unmarshal([]byte(raw), &m) == nil {
-			if okVal, _ := m["success"].(bool); okVal {
-				if claudeIP == "" {
-					if s, ok := m["ip"].(string); ok {
-						claudeIP = s
-					}
-				}
-				if country == "未知" {
-					if s, ok := m["country"].(string); ok && s != "" {
-						country = s
-					}
-				}
-				if countryCode == "" {
-					if s, ok := m["country_code"].(string); ok && s != "" {
-						countryCode = s
-					}
-				}
-				if city == "未知" {
-					if s, ok := m["city"].(string); ok && s != "" {
-						city = s
-					}
-				}
-				if conn, ok := m["connection"].(map[string]any); ok {
-					if asn == "未知" {
-						if num, ok := conn["asn"].(float64); ok && num > 0 {
-							asn = fmt.Sprintf("AS%.0f", num)
-						}
-					}
-					if isp == "未知" {
-						if s, ok := conn["isp"].(string); ok && s != "" {
-							isp = s
-						}
-					}
-				}
-				if sec, ok := m["security"].(map[string]any); ok {
-					if b, ok := sec["hosting"].(bool); ok && b {
-						isHosting = true
-					}
-					if b, ok := sec["proxy"].(bool); ok && b {
-						isProxy = true
-					}
-					if b, ok := sec["vpn"].(bool); ok && b {
-						isVPN = true
-					}
-					if b, ok := sec["tor"].(bool); ok && b {
-						isTor = true
-					}
-					if b, ok := sec["crawler"].(bool); ok && b {
-						isCrawler = true
-					}
-				}
-			}
-		}
+	if ip == "" {
+		return parseRisk("", false, "", "", "")
 	}
-
-	if claudeIP == "" {
-		return ClaudeRiskData{
-			IP:               "获取失败",
-			Country:          "未知",
-			Flag:             "🌐",
-			City:             "未知",
-			ASN:              "未知",
-			ISP:              "未知",
-			Timezone:         "未知",
-			IPType:           "未知",
-			TrustScore:       0,
-			TrustLevel:       "无数据",
-			TrustDesc:        "未获取到 Claude AI 出口 IP，请检查代理或网络配置",
-			RegionStatusText: "未知",
-			Success:          false,
-		}
-	}
-
-	combinedProvider := strings.ToLower(fmt.Sprintf("%s %s %s", isp, org, asn))
-	if !isHosting {
-		for _, kw := range hostingKeywords {
-			if strings.Contains(combinedProvider, kw) {
-				isHosting = true
-				break
-			}
-		}
-	}
-
-	if isProxy && isHosting && (strings.Contains(combinedProvider, "google") ||
-		strings.Contains(combinedProvider, "amazon") ||
-		strings.Contains(combinedProvider, "microsoft") ||
-		strings.Contains(combinedProvider, "cloudflare") ||
-		strings.Contains(combinedProvider, "oracle")) {
-		isProxy = false
-	}
-
-	ipType := "住宅IP"
-	ipTypeEn := "(Residential)"
-	if isHosting {
-		ipType = "机房IP"
-		ipTypeEn = "(Hosting)"
-	} else if isMobile {
-		ipType = "移动网络"
-		ipTypeEn = "(Mobile)"
-	}
-
-	upperCC := strings.ToUpper(countryCode)
-	regionSupported := upperCC != "" && !unsupportedCountryCodes[upperCC]
-	regionStatusText := "不支持"
-	if regionSupported {
-		regionStatusText = "正常"
-	}
-
-	score := 100
-	if isHosting {
-		score -= 11
-	}
-	if isVPN {
-		score -= 15
-	}
-	if isProxy {
-		score -= 22
-	}
-	if isTor {
-		score -= 45
-		isAbuse = true
-	}
-	if isCrawler {
-		score -= 20
-	}
-	if !regionSupported {
-		score -= 25
-	}
-	if strings.Contains(claudeIP, ":") {
-		score -= 5
-	}
-	if score < 5 {
-		score = 5
-	}
-
-	trustLevel := "高危"
-	trustDesc := "该 IP 风险较高，极易触发 Claude 封禁或拦截"
-	if score >= 80 {
-		trustLevel = "纯净"
-		trustDesc = "该 IP 信誉优异"
-	} else if score >= 65 {
-		trustLevel = "低风险"
-		trustDesc = "该 IP 信誉良好，可正常使用"
-	} else if score >= 45 {
-		trustLevel = "中风险"
-		trustDesc = "该 IP 存在共享或风控记录，建议留意"
-	}
-
-	return ClaudeRiskData{
-		IP:               claudeIP,
-		IsIPv6:           strings.Contains(claudeIP, ":"),
-		Country:          country,
-		CountryCode:      upperCC,
-		Flag:             countryCodeToFlag(upperCC),
-		City:             city,
-		Region:           region,
-		ASN:              asn,
-		ISP:              isp,
-		Org:              org,
-		Timezone:         timezone,
-		IPType:           ipType,
-		IPTypeEn:         ipTypeEn,
-		IsHosting:        isHosting,
-		TrustScore:       score,
-		TrustLevel:       trustLevel,
-		TrustDesc:        trustDesc,
-		RegionSupported:  regionSupported,
-		RegionStatusText: regionStatusText,
-		VPNDetected:      isVPN,
-		ProxyDetected:    isProxy,
-		TorDetected:      isTor,
-		CrawlerDetected:  isCrawler,
-		AbuseDetected:    isAbuse,
-		Success:          true,
-	}
+	a := httpGetString(client, "http://ip-api.com/json/"+ip+"?fields=status,query,country,countryCode,regionName,city,as,isp,org,timezone,hosting,proxy,mobile")
+	b := httpGetString(client, "https://ipwho.is/"+ip)
+	return parseRisk(ip, verified, source, a, b)
 }
 
 // 4. 检测 Claude 可用性与延迟
@@ -665,12 +446,14 @@ func detectClaudeAvailability(proxyMode, customProxy string) []EndpointPingResul
 				if ms < 1 {
 					ms = 1
 				}
+				status, statusText := classifyHTTP(resp.StatusCode)
 				results[idx] = EndpointPingResult{
 					Domain:     domain,
 					Reachable:  true,
 					LatencyMs:  ms,
 					StatusCode: resp.StatusCode,
-					StatusText: "正常",
+					StatusText: statusText,
+					Status:     status,
 				}
 			} else {
 				results[idx] = EndpointPingResult{
@@ -679,6 +462,7 @@ func detectClaudeAvailability(proxyMode, customProxy string) []EndpointPingResul
 					LatencyMs:  0,
 					StatusCode: 0,
 					StatusText: "连接失败",
+					Status:     "error",
 				}
 			}
 		}(i, d)
@@ -692,60 +476,31 @@ func detectDNSLeak(proxyMode, customProxy, claudeCountryCode string) DNSLeakResu
 	client := buildHTTPClient(proxyMode, customProxy, 5*time.Second, false)
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
-	randID := hex.EncodeToString(b)
-	raw := httpGetString(client, fmt.Sprintf("http://%s.edns.ip-api.com/json", randID))
-
-	if raw != "" {
-		var parsed struct {
-			DNS struct {
-				IP  string `json:"ip"`
-				Geo string `json:"geo"`
-			} `json:"dns"`
-		}
-		if json.Unmarshal([]byte(raw), &parsed) == nil && parsed.DNS.IP != "" {
-			isChinaDNS := strings.Contains(strings.ToLower(parsed.DNS.Geo), "china")
-			isOverseasClaude := claudeCountryCode != "" && claudeCountryCode != "CN"
-			leaked := isChinaDNS && isOverseasClaude
-			statusText := "未检测到泄露"
-			if leaked {
-				statusText = "检测到国内DNS泄露"
-			}
-			return DNSLeakResult{
-				Leaked:     leaked,
-				StatusText: statusText,
-				DNSIP:      parsed.DNS.IP,
-				DNSGeo:     parsed.DNS.Geo,
-			}
-		}
-	}
-
-	return DNSLeakResult{
-		Leaked:     false,
-		StatusText: "未检测到泄露",
-		DNSIP:      "加密 DNS / DoH",
-		DNSGeo:     "Cloudflare / 安全解析",
-	}
+	raw := httpGetString(client, fmt.Sprintf("http://%s.edns.ip-api.com/json", hex.EncodeToString(b)))
+	return parseDNS(raw, claudeCountryCode)
 }
 
 func fetchBasicIPGeo(client *http.Client, ip string) (string, string) {
-	raw := httpGetString(client, fmt.Sprintf("http://ip-api.com/json/%s?fields=status,country,countryCode,regionName,city,isp", ip))
-	if raw != "" {
-		var m map[string]string
-		if json.Unmarshal([]byte(raw), &m) == nil && m["status"] == "success" {
-			cc := m["countryCode"]
-			var parts []string
-			seen := map[string]bool{}
-			for _, k := range []string{"country", "regionName", "city", "isp"} {
-				v := strings.TrimSpace(m[k])
-				if v != "" && !seen[v] {
-					seen[v] = true
-					parts = append(parts, v)
-				}
-			}
-			return cc, strings.Join(parts, " ")
+	raw := httpGetString(client, "https://ipwho.is/"+ip)
+	var m map[string]any
+	_ = json.Unmarshal([]byte(raw), &m)
+	subject, _ := m["ip"].(string)
+	if m["success"] != true || validIP(subject) != validIP(ip) {
+		return "", ""
+	}
+	cc, _ := m["country_code"].(string)
+	parts := []string{}
+	for _, key := range []string{"country", "region", "city"} {
+		if s, ok := m[key].(string); ok && s != "" {
+			parts = append(parts, s)
 		}
 	}
-	return "", ""
+	if conn, ok := m["connection"].(map[string]any); ok {
+		if s, ok := conn["isp"].(string); ok && s != "" {
+			parts = append(parts, s)
+		}
+	}
+	return cc, strings.Join(parts, " ")
 }
 
 // 6. 检查 GitHub Release 最新版本
@@ -824,7 +579,7 @@ func compareSemver(v1, v2 string) bool {
 }
 
 func openExternalBrowser(targetURL string) {
-	if targetURL == "" {
+	if !validExternalURL(targetURL) {
 		return
 	}
 	if runtime.GOOS == "windows" {
@@ -844,12 +599,12 @@ func launchAppWindow(appURL string) {
 	}
 
 	candidates := []string{
-		 filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
-		 filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
-		 filepath.Join(os.Getenv("LocalAppData"), `Microsoft\Edge\Application\msedge.exe`),
-		 filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
-		 filepath.Join(os.Getenv("ProgramFiles(x86)"), `Google\Chrome\Application\chrome.exe`),
-		 filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Microsoft\Edge\Application\msedge.exe`),
+		filepath.Join(os.Getenv("ProgramFiles"), `Microsoft\Edge\Application\msedge.exe`),
+		filepath.Join(os.Getenv("LocalAppData"), `Microsoft\Edge\Application\msedge.exe`),
+		filepath.Join(os.Getenv("ProgramFiles"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("ProgramFiles(x86)"), `Google\Chrome\Application\chrome.exe`),
+		filepath.Join(os.Getenv("LocalAppData"), `Google\Chrome\Application\chrome.exe`),
 	}
 
 	for _, exe := range candidates {
@@ -889,12 +644,22 @@ func main() {
 	// 首页返回内嵌的 Resources/index.html
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		atomic.StoreInt64(&lastHeartbeat, time.Now().Unix())
-		data, err := embeddedFiles.ReadFile("Resources/index.html")
-		if err != nil {
-			http.Error(w, "Missing embedded index.html", http.StatusInternalServerError)
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+		mime := map[string]string{"/index.html": "text/html; charset=utf-8", "/app.js": "text/javascript; charset=utf-8", "/diagnostics.js": "text/javascript; charset=utf-8"}
+		kind, ok := mime[path]
+		if !ok {
+			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		data, err := embeddedFiles.ReadFile("Resources" + path)
+		if err != nil {
+			http.Error(w, "Missing resource", 500)
+			return
+		}
+		w.Header().Set("Content-Type", kind)
 		_, _ = w.Write(data)
 	})
 
@@ -930,13 +695,17 @@ func main() {
 		q := r.URL.Query()
 		curVer := q.Get("currentVersion")
 		if curVer == "" {
-			curVer = "1.1.0"
+			curVer = appVersion()
 		}
 		writeJSON(w, checkAppUpdate(curVer, q.Get("proxyMode"), q.Get("customProxy")))
 	})
 
 	mux.HandleFunc("/api/open-url", func(w http.ResponseWriter, r *http.Request) {
 		target := r.URL.Query().Get("url")
+		if !validExternalURL(target) {
+			http.Error(w, "HTTPS URL required", 400)
+			return
+		}
 		openExternalBrowser(target)
 		w.WriteHeader(http.StatusNoContent)
 	})
@@ -977,5 +746,13 @@ func main() {
 		launchAppWindow(appURL)
 	}()
 
-	_ = http.Serve(listener, mux)
+	_ = http.Serve(listener, localOnly(listener.Addr().String(), mux))
+}
+
+func appVersion() string {
+	b, e := embeddedFiles.ReadFile("VERSION")
+	if e != nil {
+		return "1.1.1"
+	}
+	return strings.TrimSpace(string(b))
 }

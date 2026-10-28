@@ -1,0 +1,76 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const path=require('node:path');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const root=path.resolve(__dirname,'..');
+const out=process.env.QA_OUTPUT||path.join(root,'build','qa');fs.mkdirSync(out,{recursive:true});
+(async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_EXECUTABLE||undefined});
+ try{
+  const context=await browser.newContext({viewport:{width:1160,height:860},deviceScaleFactor:1});
+  await context.route(/^https?:/,route=>route.abort());
+  await context.addInitScript({path:root+'/Tests/ui-fixture.js'});
+  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('file://'+root+'/Resources/index.html');
+  await page.waitForFunction(()=>document.getElementById('runStatus').textContent.includes('本轮已结束'));
+  assert.equal(await page.locator('#banProbNum').textContent(),'31 分');
+  assert.equal(await page.locator('#trustScoreNum').textContent(),'1/5');
+  assert.equal(await page.locator('#secVPN').getAttribute('class'),'pill pill-gray');
+  assert.equal(await page.locator('#dnsStatusPill').getAttribute('class'),'pill pill-gray');
+  assert.equal(await page.locator('#pingClaudePill').getAttribute('class'),'pill pill-yellow');
+  await page.screenshot({path:out+'/ui-light.png',fullPage:true,animations:'disabled'});
+  await page.locator('#hideIpCheckbox').check();
+  assert.equal((await page.locator('body').innerText()).includes('8.8.8.8'),false);
+  assert.equal((await page.locator('body').innerText()).includes('9.9.9.9'),false);
+  await page.getByText('导出脱敏报告',{exact:true}).click();
+  const exported=await page.evaluate(()=>window.__fixtureExport);assert.ok(exported.redacted);assert.equal(JSON.stringify(exported).includes('8.8.8.8'),false);
+  await page.locator('summary').click();
+  await page.getByTitle('切换深色/浅色模式').click();
+  await page.waitForFunction(()=>getComputedStyle(document.body).backgroundColor==='rgb(13, 17, 23)');
+  await page.screenshot({path:out+'/ui-dark.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:820,height:640});
+  await page.waitForFunction(()=>innerWidth===820);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.screenshot({path:out+'/ui-narrow.png',fullPage:true,animations:'disabled'});
+  await page.screenshot({path:out+'/ui-narrow-top.png',animations:'disabled'});
+  await page.locator('.ban-card').scrollIntoViewIfNeeded();
+  await page.screenshot({path:out+'/ui-narrow-evidence.png',animations:'disabled'});
+  await page.locator('#btnCheckUpdate').click();
+  await page.waitForFunction(()=>document.getElementById('updateModalTitle').textContent==='未发现更高版本');
+  await page.getByText('关闭',{exact:true}).click();
+  await page.getByText('清除',{exact:true}).click();assert.equal(await page.locator('#historyCount').textContent(),'0');
+  await page.getByText('不使用显式代理',{exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('runStatus').textContent.includes('本轮已结束'));
+  assert.equal(await page.evaluate(()=>window.__fixtureMessages.filter(m=>m.action==='runFullCheck').at(-1).proxyMode),'direct');
+  // Exercise real controls for mode edits, cancellation, retries and reversible preferences.
+  await page.getByText('指定代理端口',{exact:true}).click();
+  await page.locator('#customProxyInput').fill('file:///tmp/test');
+  await page.getByText('应用',{exact:true}).click();
+  assert.ok((await page.locator('#notice').textContent()).includes('有效'));
+  await page.locator('#customProxyInput').fill('127.0.0.1:7890');
+  await page.getByText('应用',{exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('runStatus').textContent.includes('本轮已结束'));
+  assert.equal(await page.evaluate(()=>window.__fixtureMessages.filter(m=>m.action==='runFullCheck').at(-1).proxyMode),'custom');
+  await page.getByText('跟随系统/TUN',{exact:true}).click();
+  await page.waitForFunction(()=>document.getElementById('runStatus').textContent.includes('本轮已结束'));
+  await page.evaluate(()=>window.__fixtureDelay=600);
+  await page.locator('#btnRefreshAll').click();await page.locator('#btnCancel').click();
+  assert.ok((await page.locator('#runStatus').textContent()).includes('已取消'));
+  assert.equal(await page.locator('#claudeIP').textContent(),'未完成（已取消）');
+  await page.evaluate(()=>window.__fixtureDelay=0);
+  for(const index of [0,1,2]){
+   await page.locator('.grid-3 .btn-card-mini').nth(index).click();
+   await page.waitForFunction(()=>document.getElementById('runStatus').textContent.includes('本轮已结束'));
+  }
+  await page.locator('#hideIpCheckbox').uncheck();
+  assert.equal(await page.locator('#claudeIP').textContent(),'8.8.8.8');
+  await page.getByTitle('切换深色/浅色模式').click();
+  await page.waitForFunction(()=>getComputedStyle(document.body).backgroundColor==='rgb(248, 249, 251)');
+  assert.deepEqual(errors,[]);
+  const plain=await browser.newContext({viewport:{width:1160,height:860}});await plain.route(/^https?:/,r=>r.abort());const empty=await plain.newPage();await empty.goto('file://'+root+'/Resources/index.html');
+  assert.equal(await empty.locator('#runStatus').textContent(),'未连接桌面检测宿主');assert.equal(await empty.locator('#banProbNum').textContent(),'—');
+  const report={passed:true,errors,checks:['light','dark','820px no overflow','missing evidence gray','HTTP 403 distinct','mixed RTC mismatch','mask all IP and history','redacted export','old version comparison','clear history','proxy mode refresh','no host no invented data','custom proxy validation','cancel and stale callbacks','three retry buttons','theme and privacy round trip'],screenshots:['ui-light.png','ui-dark.png','ui-narrow.png']};
+  fs.writeFileSync(out+'/ui-qa.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exit(1)});

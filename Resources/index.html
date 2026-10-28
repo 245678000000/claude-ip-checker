@@ -248,8 +248,13 @@
 
     .switch input {
       opacity: 0;
-      width: 0;
-      height: 0;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      z-index: 1;
+      cursor: pointer;
     }
 
     .slider {
@@ -260,6 +265,8 @@
       transition: 0.2s;
       border-radius: 21px;
     }
+
+    .switch input:focus-visible + .slider { outline: 2px solid #d97757; outline-offset: 3px; }
 
     .slider:before {
       position: absolute;
@@ -388,7 +395,7 @@
       text-overflow: ellipsis;
     }
 
-    /* 信任评分卡片 */
+    /* 安全情报覆盖率卡片 */
     .score-center {
       text-align: center;
       margin: 8px 0 18px;
@@ -404,7 +411,7 @@
     .score-num {
       font-size: 32px;
       font-weight: 800;
-      color: #16a34a;
+      color: var(--text-primary);
       line-height: 1.1;
     }
 
@@ -414,7 +421,7 @@
       font-weight: 500;
     }
 
-    /* 渐变评分条与黑色指针 */
+    /* 数据覆盖率刻度，不表示风险大小 */
     .gauge-wrap {
       margin: 18px 0 22px;
     }
@@ -423,7 +430,7 @@
       position: relative;
       height: 10px;
       border-radius: 999px;
-      background: linear-gradient(90deg, #dc2626 0%, #ea580c 25%, #eab308 52%, #22c55e 78%, #15803d 100%);
+      background: linear-gradient(90deg, #cbd5e1 0%, #93c5fd 50%, #3b82f6 100%);
       margin-bottom: 8px;
     }
 
@@ -589,7 +596,7 @@
       animation: spin 0.8s linear infinite;
     }
 
-    /* 封号概率预测横幅卡片 */
+    /* 网络诊断参考横幅卡片 */
     .ban-card {
       background: var(--bg-card);
       border: 1px solid var(--border-card);
@@ -772,6 +779,28 @@
     .btn-primary:hover {
       opacity: 0.92;
     }
+
+    .run-strip { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; font-size:12px; color:var(--text-secondary); padding:0 0 16px; }
+    #runStatus { font-weight:700; color:var(--text-primary); }
+    .source-note { font-size:11px; color:var(--text-secondary); line-height:1.6; margin-top:10px; overflow-wrap:anywhere; }
+    .flag-emoji { font:700 12px ui-monospace,monospace; border:1px solid var(--border-row); padding:5px 7px; border-radius:6px; flex-shrink:0; }
+    .ip-loc-text { white-space:normal; overflow-wrap:anywhere; }
+    .ip-text { font-size:clamp(20px,2.4vw,28px); }
+    .controls-right { flex-wrap:wrap; }
+    .top-bar { flex-wrap:wrap; gap:16px; }
+    .ban-factor-item { overflow-wrap:anywhere; }
+    .ban-grid > *, .grid-3 > *, .title-group, .controls-right { min-width:0; }
+    .ip-text { overflow-wrap:anywhere; }
+    .ban-prob-row, .ban-scene-row { flex-wrap:wrap; gap:8px; }
+    .ban-factors { max-height:240px; overflow:auto; }
+    .history-meta { font-size:11px; color:var(--text-secondary); line-height:1.5; }
+    .history-item { gap:12px; flex-wrap:wrap; }
+    .evidence-panel { background:var(--bg-card); padding:16px 20px; border:1px solid var(--border-row); border-radius:16px; margin-bottom:20px; }
+    .evidence-panel summary { cursor:pointer; font-size:13px; font-weight:600; }
+    .evidence-panel pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; max-height:360px; overflow:auto; }
+    button:disabled { opacity:.45; cursor:default; }
+    button:focus-visible, input:focus-visible, summary:focus-visible { outline:2px solid #d97757; outline-offset:3px; }
+    @media(max-width:920px) { .grid-3 { grid-template-columns:1fr; } .grid-2 { grid-template-columns:1fr; } .ban-grid { grid-template-columns:1fr; } .ban-left { border-right:0; } .controls-right { justify-content:flex-start; } }
   </style>
 </head>
 <body>
@@ -788,7 +817,7 @@
         <div class="proxy-bar" title="选择检测时使用的代理通道">
           <button class="proxy-tab active" data-mode="system" onclick="setProxyMode('system')">跟随系统/TUN</button>
           <button class="proxy-tab" data-mode="custom" onclick="setProxyMode('custom')">指定代理端口</button>
-          <button class="proxy-tab" data-mode="direct" onclick="setProxyMode('direct')">强制直连</button>
+          <button class="proxy-tab" data-mode="direct" onclick="setProxyMode('direct')">不使用显式代理</button>
         </div>
 
         <div id="customProxyBox" class="custom-proxy-box">
@@ -806,8 +835,10 @@
           重新检测
         </button>
 
+        <button id="btnCancel" class="btn-action" onclick="cancelCheck()" disabled>取消</button>
+        <button class="btn-action" onclick="exportReport()">导出脱敏报告</button>
         <button id="btnCheckUpdate" class="btn-action" onclick="triggerUpdateCheck(true)" title="检查 GitHub 最新版本">
-          <span>v1.1.0 · 检查更新</span>
+          <span>v1.1.1 · 检查更新</span>
           <span id="updateRedDot" class="update-dot"></span>
         </button>
 
@@ -823,7 +854,7 @@
 
     <!-- 副标题与隐藏 IP 开关 -->
     <div class="subtitle-row">
-      <p class="subtitle">检测当前Claude AI出口 IP 纯净度、风险、属性（住宅/机房/原生）、DNS、UDP、时区、指纹、历史和安全性</p>
+      <p class="subtitle">出口对比 · 连接状态 · 第三方情报 · 隐私诊断。未知状态保留，不推断账户结果。</p>
       <label class="hide-ip-toggle">
         <span>隐藏IP</span>
         <span class="switch">
@@ -833,9 +864,10 @@
       </label>
     </div>
 
+    <div class="run-strip"><span id="runStatus" role="status" aria-live="polite">尚未检测</span><span id="notice">检测不读取 Claude 账户。</span></div>
     <!-- IPv6 提示条 -->
     <div id="ipv6Warning" class="ipv6-warning">
-      <span>⚠️ 当前出口包含 IPv6 环境，不建议采用 IPv6 访问 Claude / Claude Code，容易触发地区漂移与风控。</span>
+      <span>当前探测到 IPv6 出口；IPv6 本身不是风险结论，请结合路由与候选地址对比。</span>
     </div>
 
     <!-- 第一行：三路出口 IP 卡片 -->
@@ -843,14 +875,14 @@
       <!-- 中国出口 IPv4 -->
       <div class="card">
         <div class="card-header">
-          <span class="card-title">中国出口IPV4</span>
+          <span class="card-title">基础 IPv4 出口</span>
         </div>
         <div>
           <div class="ip-main-row">
-            <span id="cnFlag" class="flag-emoji">🇨🇳</span>
+            <span id="cnFlag" class="flag-emoji">—</span>
             <span id="cnIP" class="ip-text selectable">检测中...</span>
           </div>
-          <div id="cnLoc" class="ip-loc-text selectable">正在直连国内节点探测...</div>
+          <div id="cnLoc" class="ip-loc-text selectable">正在探测 IPv4…</div><div id="cnSource" class="source-note">不使用显式代理；TUN 路由仍可能生效</div>
         </div>
       </div>
 
@@ -866,10 +898,10 @@
         </div>
         <div>
           <div class="ip-main-row">
-            <span id="cfFlag" class="flag-emoji">🌐</span>
+            <span id="cfFlag" class="flag-emoji">—</span>
             <span id="cfIP" class="ip-text selectable">检测中...</span>
           </div>
-          <div id="cfLoc" class="ip-loc-text selectable">正在连接 Cloudflare Trace...</div>
+          <div id="cfLoc" class="ip-loc-text selectable">正在连接 Cloudflare Trace...</div><div id="cfSource" class="source-note">Cloudflare Trace</div>
         </div>
       </div>
 
@@ -880,52 +912,52 @@
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.4" stroke-linecap="round">
               <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M19.07 4.93L4.93 19.07"/>
             </svg>
-            CLAUDE AI出口IP
+            CLAUDE 域名出口
           </span>
         </div>
         <div>
           <div class="ip-main-row">
-            <span id="claudeFlag" class="flag-emoji">🌐</span>
+            <span id="claudeFlag" class="flag-emoji">—</span>
             <span id="claudeIP" class="ip-text selectable">检测中...</span>
           </div>
-          <div id="claudeLoc" class="ip-loc-text selectable">正在分析 Claude 分流路由...</div>
+          <div id="claudeLoc" class="ip-loc-text selectable">正在分析 Claude 分流路由...</div><div id="claudeSource" class="source-note">等待来源</div>
         </div>
       </div>
     </div>
 
-    <!-- 新增：Claude 账号封号概率预测与防封诊断报告 -->
+    <!-- 网络诊断参考与证据汇总 -->
     <div class="ban-card">
       <div class="card-header" style="margin-bottom: 12px;">
         <span class="card-title">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
           </svg>
-          CLAUDE 账号封号概率预测 (BAN RISK PREDICTION)
+          网络环境风险参考 · 非封号概率
         </span>
-        <span id="banSummaryBadge" class="pill pill-gray">正在综合 6 维风控模型评估...</span>
+        <span id="banSummaryBadge" class="pill pill-gray">正在收集证据…</span>
       </div>
 
       <div class="ban-grid">
-        <!-- 左侧：封号概率百分比 -->
+        <!-- 左侧：启发式参考分 -->
         <div class="ban-left">
-          <div style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">当前环境综合封号概率</div>
+          <div style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">本工具启发式参考分</div>
           <div class="ban-prob-row">
-            <span id="banProbNum" class="ban-prob-num">--%</span>
+            <span id="banProbNum" class="ban-prob-num">—</span>
             <span id="banProbLevel" class="pill pill-gray">计算中</span>
           </div>
           <div class="ban-progress-track">
             <div id="banProgressFill" class="ban-progress-fill" style="width: 0%;"></div>
           </div>
           <div id="banMainAdvice" style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
-            正在结合 IP 类型、时区偏移、DNS 泄露与切换频率计算...
+            根据已取得证据汇总参考分；不代表官方信誉或账号结果。
           </div>
         </div>
 
         <!-- 中间：风险归因明细与防封建议 -->
         <div id="banFactorList" class="ban-factors">
-          <div class="ban-factor-item">⏳ 正在扫描地区合规白名单与 ASN 信誉库...</div>
-          <div class="ban-factor-item">⏳ 正在比对本机系统时区与出口 IP 时区偏移...</div>
-          <div class="ban-factor-item">⏳ 正在检测 DNS / WebRTC 协议泄露与节点跳变记录...</div>
+          <div class="ban-factor-item">正在收集出口、情报和连接证据…</div>
+          <div class="ban-factor-item">时区按当前 UTC 偏移比较，不按地区名称加分。</div>
+          <div class="ban-factor-item">字段缺失、超时和未执行项目会明确标记。</div>
         </div>
 
         <!-- 右侧：三大使用场景风险评级 -->
@@ -951,7 +983,7 @@
       <!-- 卡片 4：Claude AI 信任评分 -->
       <div class="card">
         <div class="card-header">
-          <span class="card-title">CLAUDE AI信任评分(TRUST SCORE)</span>
+          <span class="card-title">安全情报覆盖率</span>
         </div>
 
         <div class="score-center">
@@ -959,7 +991,7 @@
             <span id="trustScoreNum" class="score-num">--</span>
             <span id="trustLevelPill" class="pill pill-gray">评估中</span>
           </div>
-          <div id="trustDescText" class="score-desc">正在计算出口 IP 纯净度...</div>
+          <div id="trustDescText" class="score-desc">等待有效情报字段…</div>
         </div>
 
         <div class="gauge-wrap">
@@ -967,18 +999,18 @@
             <div id="gaugePointer" class="gauge-pointer" style="left: 50%;"></div>
           </div>
           <div class="gauge-labels">
-            <span>0 高危</span>
-            <span>25</span>
-            <span>50</span>
-            <span>75</span>
-            <span>100 可信</span>
+            <span>0 项</span>
+            <span>1</span>
+            <span>2–3</span>
+            <span>4</span>
+            <span>5 项</span>
           </div>
         </div>
 
         <div class="kv-list" style="border-top: 1px solid var(--border-row); padding-top: 4px;">
           <div class="kv-row">
-            <span class="kv-label">Claude支持地区</span>
-            <span id="claudeRegionPill" class="pill pill-gray">检测中</span>
+            <span class="kv-label">地区支持规则</span>
+            <button id="claudeRegionPill" class="pill pill-gray" onclick="openExternal('https://www.anthropic.com/supported-countries')" title="打开官方支持地区列表">待官方核对</button>
           </div>
         </div>
       </div>
@@ -986,7 +1018,7 @@
       <!-- 卡片 5：Claude AI 出口 IP 属性 -->
       <div class="card">
         <div class="card-header">
-          <span class="card-title">CLAUDE AI出口IP 属性</span>
+          <span class="card-title">CLAUDE 域名出口 属性</span>
         </div>
         <div class="kv-list">
           <div class="kv-row">
@@ -1018,7 +1050,7 @@
       <!-- 卡片 6：Claude AI 出口 IP 安全检测 -->
       <div class="card">
         <div class="card-header">
-          <span class="card-title">CLAUDE AI出口IP安全检测</span>
+          <span class="card-title">第三方安全情报</span>
         </div>
         <div class="kv-list">
           <div class="kv-row">
@@ -1052,8 +1084,8 @@
         <div>
           <div class="card-header">
             <span class="card-title">
-              CLAUDE 可用性检测
-              <span class="info-tip" title="因为 Claude 服务器主要部署在美国，从亚洲访问出现 100ms-250ms 延迟属于正常情况">i</span>
+              网站连接响应
+              <span class="info-tip" title="首页 HTTP 响应只证明本次网络连接状态，不代表登录、对话或 API 功能正常">i</span>
             </span>
             <button class="btn-card-mini" onclick="refreshAvailability()">刷新</button>
           </div>
@@ -1076,12 +1108,12 @@
         </div>
       </div>
 
-      <!-- 卡片 8：DNS 泄露检测 -->
+      <!-- 卡片 8：DNS 解析路径观测 -->
       <div class="card">
         <div>
           <div class="card-header">
-            <span class="card-title">DNS 泄露检测</span>
-            <button class="btn-card-mini" onclick="refreshDNS()">查询DNS安全</button>
+            <span class="card-title">DNS 解析路径观测</span>
+            <button class="btn-card-mini" onclick="refreshDNS()">重新检测</button>
           </div>
           <div class="kv-list">
             <div class="kv-row">
@@ -1093,37 +1125,39 @@
               <span id="dnsExitInfo" class="kv-val selectable" style="font-size: 13px; font-weight: 600;">--</span>
             </div>
           </div>
+          <p id="dnsEvidence" class="source-note">只观测本次请求的解析路径；不等于系统全局检测。</p>
         </div>
       </div>
 
-      <!-- 卡片 9：WebRTC UDP 泄露检测 -->
+      <!-- 卡片 9：WebRTC 出口比较 -->
       <div class="card">
         <div>
           <div class="card-header">
-            <span class="card-title">WEBRTC UDP 泄露检测</span>
-            <button class="btn-card-mini" onclick="checkWebRTCLeak()">深度查询</button>
+            <span class="card-title">WEBRTC 出口对比</span>
+            <button class="btn-card-mini" onclick="triggerFullCheck()">重新检测</button>
           </div>
           <div class="kv-list">
             <div class="kv-row">
               <span class="kv-label">状态</span>
-              <span id="webrtcStatusPill" class="pill pill-green">未检测到泄露</span>
+              <span id="webrtcStatusPill" class="pill pill-gray">等待检测</span>
             </div>
             <div class="kv-row">
               <span class="kv-label">UDP 候选地址</span>
-              <span id="webrtcIPInfo" class="kv-val selectable" style="font-size: 13px; font-weight: 600;">未暴露公网 IP</span>
+              <span id="webrtcIPInfo" class="kv-val selectable" style="font-size: 13px; font-weight: 600;">等待 ICE 候选</span>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- 第四行：用户设备指纹信息 + 历史记录 -->
+<details class="evidence-panel"><summary>查看探测来源与证据（默认脱敏）</summary><pre id="evidenceJSON"></pre></details>
+        <!-- 第四行：用户设备指纹信息 + 历史记录 -->
     <div class="grid-2">
       <!-- 卡片 10：用户设备信息 -->
       <div class="card">
         <div>
           <div class="card-header">
-            <span class="card-title">CLAUDE AI出口IP用户设备信息</span>
+            <span class="card-title">本应用 WebView 环境</span>
           </div>
           <div class="kv-list">
             <div class="kv-row">
@@ -1161,7 +1195,7 @@
             <button class="btn-card-mini" onclick="clearHistory()">清除</button>
           </div>
           <div style="font-size: 12px; color: var(--text-secondary); margin-bottom: 10px;">
-            <span id="historyCount">0</span> 条记录，100% 隐私友好，数据仅保存在 Mac 本地
+            <span id="historyCount">0</span> 条记录，仅保存在本机；新记录含日期，旧记录不参与 24 小时统计
           </div>
           <div id="historyContainer" class="history-list">
             <div class="history-empty">暂无历史检测记录</div>
@@ -1186,741 +1220,7 @@
     </div>
   </div>
 
-  <script>
-    // 当前代理模式状态：'system' | 'custom' | 'direct'
-    const APP_VERSION = '1.1.0';
-    let currentProxyMode = 'system';
-    let currentClaudeTimezone = '';
-    let currentClaudeIP = '';
-    let lastRiskData = null;
-    let lastDNSLeaked = false;
-    let lastWebRTCLeaked = false;
-    let latestDownloadURL = 'https://github.com/245678000000/claude-ip-checker/releases';
-    let shouldPopupUpdateModal = false;
-
-    // 切换深色/浅色主题
-    function toggleTheme() {
-      document.body.classList.toggle('dark');
-      localStorage.setItem('claude_ip_theme', document.body.classList.contains('dark') ? 'dark' : 'light');
-    }
-
-    // 切换隐藏 IP 打码模式
-    function toggleHideIP(hide) {
-      const ids = ['cnIP', 'cfIP', 'claudeIP', 'dnsExitInfo', 'webrtcIPInfo'];
-      ids.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) {
-          el.classList.toggle('ip-masked', hide);
-        }
-      });
-    }
-
-    // 设置代理检测模式
-    function setProxyMode(mode) {
-      currentProxyMode = mode;
-      document.querySelectorAll('.proxy-tab').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.mode === mode);
-      });
-      const box = document.getElementById('customProxyBox');
-      box.classList.toggle('visible', mode === 'custom');
-      if (mode !== 'custom') {
-        triggerFullCheck();
-      }
-    }
-
-    function getCustomProxyValue() {
-      return (document.getElementById('customProxyInput').value || '').trim();
-    }
-
-    // 向原生宿主发送消息（同时兼容 macOS WKWebView 与 Windows 本地宿主服务）
-    function postToNative(action, payload = {}) {
-      const reqBody = {
-        action,
-        proxyMode: currentProxyMode,
-        customProxy: getCustomProxyValue(),
-        ...payload
-      };
-
-      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.nativeBridge) {
-        window.webkit.messageHandlers.nativeBridge.postMessage(reqBody);
-        return true;
-      }
-
-      if (window.location.protocol.startsWith('http')) {
-        runWindowsNativeBridge(reqBody);
-        return true;
-      }
-
-      return false;
-    }
-
-    async function runWindowsNativeBridge(reqBody) {
-      const qs = `?proxyMode=${encodeURIComponent(reqBody.proxyMode)}&customProxy=${encodeURIComponent(reqBody.customProxy || '')}`;
-      if (reqBody.action === 'runFullCheck') {
-        fetch('/api/sys-proxy' + qs).then(r => r.json()).then(d => window.onNativeSystemProxy(d)).catch(() => {});
-        fetch('/api/china-ip' + qs).then(r => r.json()).then(d => window.onNativeChinaIP(d)).catch(() => {});
-        fetch('/api/cf-ip' + qs).then(r => r.json()).then(d => window.onNativeCloudflareIP(d)).catch(() => {});
-        fetch('/api/availability' + qs).then(r => r.json()).then(d => window.onNativeAvailability(d)).catch(() => {});
-        fetch('/api/claude-risk' + qs).then(r => r.json()).then(d => {
-          window.onNativeClaudeRisk(d);
-          const cc = encodeURIComponent((d && d.countryCode) || '');
-          fetch(`/api/dns-leak${qs}&cc=${cc}`).then(r => r.json()).then(dns => window.onNativeDNSLeak(dns)).catch(() => {});
-        }).catch(() => {});
-      } else if (reqBody.action === 'checkAvailability') {
-        fetch('/api/availability' + qs).then(r => r.json()).then(d => window.onNativeAvailability(d)).catch(() => {});
-      } else if (reqBody.action === 'checkDNS') {
-        fetch('/api/dns-leak' + qs).then(r => r.json()).then(d => window.onNativeDNSLeak(d)).catch(() => {});
-      } else if (reqBody.action === 'checkUpdate') {
-        fetch(`/api/check-update${qs}&currentVersion=${encodeURIComponent(APP_VERSION)}`)
-          .then(r => r.json()).then(d => window.onNativeUpdateResult(d)).catch(() => {});
-      } else if (reqBody.action === 'openExternalURL') {
-        fetch(`/api/open-url?url=${encodeURIComponent(reqBody.url || '')}`).catch(() => {});
-      }
-    }
-
-    // 触发全局检测
-    function triggerFullCheck() {
-      const btn = document.getElementById('btnRefreshAll');
-      btn.classList.add('spinning');
-
-      // 重置加载态文案
-      document.getElementById('cnIP').textContent = '检测中...';
-      document.getElementById('cfIP').textContent = '检测中...';
-      document.getElementById('claudeIP').textContent = '检测中...';
-
-      checkDeviceFingerprint();
-      checkWebRTCLeak();
-
-      const sent = postToNative('runFullCheck');
-      if (!sent) {
-        // 浏览器预览环境下的纯前端回退检测
-        runBrowserFallbackCheck();
-      }
-    }
-
-    function refreshAvailability() {
-      setPill('pingClaudePill', '测速中', 'gray');
-      setPill('pingAnthropicPill', '测速中', 'gray');
-      document.getElementById('pingClaudeMs').textContent = '';
-      document.getElementById('pingAnthropicMs').textContent = '';
-      if (!postToNative('checkAvailability')) {
-        runBrowserAvailabilityFallback();
-      }
-    }
-
-    function refreshDNS() {
-      setPill('dnsStatusPill', '检测中', 'gray');
-      document.getElementById('dnsExitInfo').textContent = '正在探测递归 DNS...';
-      postToNative('checkDNS');
-    }
-
-    // 设置胶囊样式辅助函数
-    function setPill(id, text, color) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = text;
-      el.className = 'pill pill-' + color;
-    }
-
-    // ==================== Swift 原生回调接口 ====================
-    window.onNativeSystemProxy = function(data) {
-      const badge = document.getElementById('sysProxySummary');
-      if (badge && data && data.summary) {
-        badge.textContent = data.summary;
-      }
-      if (data && data.httpProxy) {
-        const cleanHostPort = data.httpProxy.replace(/^https?:\/\//, '');
-        const input = document.getElementById('customProxyInput');
-        if (input && input.value === '127.0.0.1:7890') {
-          input.value = cleanHostPort;
-        }
-      }
-    };
-
-    window.onNativeChinaIP = function(data) {
-      document.getElementById('cnFlag').textContent = data.flag || '🇨🇳';
-      document.getElementById('cnIP').textContent = data.ip || '获取失败';
-      document.getElementById('cnLoc').textContent = data.locationText || '--';
-    };
-
-    window.onNativeCloudflareIP = function(data) {
-      document.getElementById('cfFlag').textContent = data.flag || '🌐';
-      document.getElementById('cfIP').textContent = data.ip || '获取失败';
-      document.getElementById('cfLoc').textContent = data.locationText || '--';
-    };
-
-    window.onNativeClaudeRisk = function(data) {
-      const btn = document.getElementById('btnRefreshAll');
-      btn.classList.remove('spinning');
-
-      currentClaudeIP = data.ip || '';
-      currentClaudeTimezone = data.timezone || '';
-
-      // 顶部第 3 张卡片：Claude AI 出口 IP
-      document.getElementById('claudeFlag').textContent = data.flag || '🌐';
-      document.getElementById('claudeIP').textContent = data.ip || '获取失败';
-      const locParts = [data.country, data.region, data.city, data.isp].filter(Boolean);
-      const uniqueLoc = [...new Set(locParts)].join(' ');
-      document.getElementById('claudeLoc').textContent = uniqueLoc || '未知归属地';
-
-      // IPv6 警告展示
-      const ipv6Warn = document.getElementById('ipv6Warning');
-      ipv6Warn.classList.toggle('visible', Boolean(data.isIPv6));
-
-      // 卡片 4：信任评分
-      const scoreEl = document.getElementById('trustScoreNum');
-      scoreEl.textContent = data.success ? data.trustScore : '—';
-      if (data.trustScore >= 80) {
-        scoreEl.style.color = '#16a34a';
-        setPill('trustLevelPill', data.trustLevel, 'green');
-      } else if (data.trustScore >= 60) {
-        scoreEl.style.color = '#d97706';
-        setPill('trustLevelPill', data.trustLevel, 'yellow');
-      } else {
-        scoreEl.style.color = '#dc2626';
-        setPill('trustLevelPill', data.trustLevel, 'red');
-      }
-      document.getElementById('trustDescText').textContent = data.trustDesc || '';
-      document.getElementById('gaugePointer').style.left = (data.success ? data.trustScore : 0) + '%';
-
-      if (data.success) {
-        setPill('claudeRegionPill', data.regionStatusText, data.regionSupported ? 'green' : 'red');
-      } else {
-        setPill('claudeRegionPill', '未知', 'gray');
-      }
-
-      // 卡片 5：出口 IP 属性
-      document.getElementById('attrCountry').textContent = data.country || '未知';
-      document.getElementById('attrCity').textContent = data.city || '未知';
-      if (data.success) {
-        setPill('attrTypePill', data.ipType, data.isHosting ? 'yellow' : 'green');
-        document.getElementById('attrTypeEn').textContent = data.ipTypeEn || '';
-      } else {
-        setPill('attrTypePill', '未知', 'gray');
-        document.getElementById('attrTypeEn').textContent = '';
-      }
-      document.getElementById('attrASN').textContent = data.asn || '未知';
-      document.getElementById('attrISP').textContent = data.isp || '未知';
-
-      // 卡片 6：安全检测 5 项
-      if (data.success) {
-        setPill('secVPN', data.vpnDetected ? '检测到' : '未检测到', data.vpnDetected ? 'red' : 'green');
-        setPill('secProxy', data.proxyDetected ? '检测到' : '未检测到', data.proxyDetected ? 'red' : 'green');
-        setPill('secTor', data.torDetected ? '检测到' : '未检测到', data.torDetected ? 'red' : 'green');
-        setPill('secCrawler', data.crawlerDetected ? '是' : '否', data.crawlerDetected ? 'red' : 'green');
-        setPill('secAbuse', data.abuseDetected ? '有记录' : '无记录', data.abuseDetected ? 'red' : 'green');
-      }
-
-      // 更新时区匹配校验与本地历史记录
-      lastRiskData = data;
-      verifyTimezoneConsistency();
-      if (data.success && data.ip && data.ip !== '获取失败') {
-        saveHistoryItem(data);
-      }
-      evaluateBanRisk();
-    };
-
-    window.onNativeAvailability = function(list) {
-      if (!Array.isArray(list)) return;
-      list.forEach(item => {
-        if (item.domain === 'claude.ai') {
-          setPill('pingClaudePill', item.statusText, item.reachable ? 'green' : 'red');
-          document.getElementById('pingClaudeMs').textContent = item.reachable ? (item.latencyMs + 'ms') : '';
-        } else if (item.domain === 'anthropic.com') {
-          setPill('pingAnthropicPill', item.statusText, item.reachable ? 'green' : 'red');
-          document.getElementById('pingAnthropicMs').textContent = item.reachable ? (item.latencyMs + 'ms') : '';
-        }
-      });
-    };
-
-    window.onNativeDNSLeak = function(data) {
-      if (!data) return;
-      lastDNSLeaked = Boolean(data.leaked);
-      setPill('dnsStatusPill', data.statusText, data.leaked ? 'red' : 'green');
-      document.getElementById('dnsExitInfo').textContent = `${data.dnsIP} (${data.dnsGeo})`;
-      evaluateBanRisk();
-    };
-
-    // ==================== WebRTC UDP 泄露探测 ====================
-    function checkWebRTCLeak() {
-      setPill('webrtcStatusPill', '探测中', 'gray');
-      document.getElementById('webrtcIPInfo').textContent = '正在检查 STUN 候选地址...';
-
-      const foundIPs = new Set();
-      const RTCPeer = window.RTCPeerConnection || window.webkitRTCPeerConnection;
-      if (!RTCPeer) {
-        setPill('webrtcStatusPill', '未检测到泄露', 'green');
-        document.getElementById('webrtcIPInfo').textContent = 'WebRTC 已禁用或无泄露';
-        return;
-      }
-
-      try {
-        const pc = new RTCPeer({
-          iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }, { urls: 'stun:stun.l.google.com:19302' }]
-        });
-        pc.createDataChannel('');
-        pc.onicecandidate = function(e) {
-          if (!e.candidate || !e.candidate.candidate) return;
-          const cand = e.candidate.candidate;
-          const ipMatch = cand.match(/([0-9]{1,3}(\.[0-9]{1,3}){3})/);
-          if (ipMatch && ipMatch[1]) {
-            const ip = ipMatch[1];
-            if (!ip.startsWith('127.') && !ip.startsWith('0.')) {
-              foundIPs.add(ip);
-            }
-          }
-        };
-        pc.createOffer().then(offer => pc.setLocalDescription(offer)).catch(() => {});
-
-        setTimeout(() => {
-          try { pc.close(); } catch (_) {}
-          const arr = Array.from(foundIPs);
-          // 检查是否暴露了不同于 Claude 出口 IP 的非局域网公网 IP
-          const publicIPs = arr.filter(ip =>
-            !ip.startsWith('10.') &&
-            !ip.startsWith('192.168.') &&
-            !ip.startsWith('100.64.') &&
-            !ip.startsWith('198.18.') &&
-            !/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)
-          );
-
-          if (publicIPs.length === 0) {
-            lastWebRTCLeaked = false;
-            setPill('webrtcStatusPill', '未检测到泄露', 'green');
-            document.getElementById('webrtcIPInfo').textContent = '未暴露真实公网 UDP IP';
-          } else if (currentClaudeIP && publicIPs.includes(currentClaudeIP)) {
-            lastWebRTCLeaked = false;
-            setPill('webrtcStatusPill', '未检测到泄露', 'green');
-            document.getElementById('webrtcIPInfo').textContent = publicIPs[0] + ' (与代理出口一致)';
-          } else {
-            lastWebRTCLeaked = true;
-            setPill('webrtcStatusPill', '存在UDP暴露', 'yellow');
-            document.getElementById('webrtcIPInfo').textContent = publicIPs.join(', ');
-          }
-          evaluateBanRisk();
-        }, 1800);
-      } catch (_) {
-        lastWebRTCLeaked = false;
-        setPill('webrtcStatusPill', '未检测到泄露', 'green');
-        document.getElementById('webrtcIPInfo').textContent = 'WebRTC 已受保护';
-      }
-    }
-
-    // ==================== Claude 6 维封号概率预测引擎 ====================
-    function evaluateBanRisk() {
-      const data = lastRiskData;
-      if (!data || !data.success) {
-        document.getElementById('banProbNum').textContent = '--%';
-        setPill('banProbLevel', '无数据', 'gray');
-        setPill('banSummaryBadge', '等待出口 IP 数据', 'gray');
-        return;
-      }
-
-      let prob = 3; // 基础自然风控底数 3%
-      const factors = [];
-
-      // 维度 1：国家/地区支持白名单
-      if (!data.regionSupported) {
-        prob += 58;
-        factors.push('🚨 出口位于不支持地区 (' + (data.country || data.countryCode) + ')，极易触发秒封 (+58%)');
-      } else {
-        factors.push('✅ 出口地区在 Anthropic 官方支持白名单内 (' + data.country + ')');
-      }
-
-      // 维度 2：IP 属性（住宅 vs 云大厂机房 vs 廉价商业机房）
-      const ispLower = ((data.isp || '') + ' ' + (data.org || '')).toLowerCase();
-      const isTier1Cloud = ispLower.includes('google') || ispLower.includes('amazon') || ispLower.includes('microsoft') || ispLower.includes('oracle') || ispLower.includes('cloudflare');
-      if (data.isHosting) {
-        if (isTier1Cloud) {
-          prob += 11;
-          factors.push('⚠️ 大厂云机房 IP (' + data.isp + ' +11%)：日常对话/CLI 稳定，但切勿用于新号注册或绑卡');
-        } else {
-          prob += 24;
-          factors.push('⚠️ 商业机房/VPS 节点 (' + data.isp + ' +24%)：共享人数较多时易触发批量连坐风控');
-        }
-      } else {
-        prob += 2;
-        factors.push('✅ 原生/住宅 ISP 属性 (' + data.ipType + ')，信誉权重极高');
-      }
-
-      // 维度 3：黑名单与公开代理特征
-      if (data.torDetected || data.abuseDetected) {
-        prob += 45;
-        factors.push('🚨 命中 Tor 或黑名单滥用记录 (+45%)，请立即更换节点');
-      } else if (data.proxyDetected) {
-        prob += 22;
-        factors.push('⚠️ 被标记为公开代理池节点 (+22%)，容易触发 Cloudflare 盾与封号');
-      } else if (data.vpnDetected) {
-        prob += 12;
-        factors.push('⚠️ 带有商业 VPN 特征标记 (+12%)');
-      }
-
-      // 维度 4：本地系统时区 vs 出口 IP 时区偏移一致性
-      const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-      if (data.timezone && data.timezone !== '未知' && localTz) {
-        if (localTz !== data.timezone) {
-          // 判断是否同属亚洲相近时区
-          const bothAsia = localTz.startsWith('Asia/') && data.timezone.startsWith('Asia/');
-          if (bothAsia) {
-            prob += 3;
-            factors.push('ℹ️ 本机时区 (' + localTz + ') 与 IP 时区 (' + data.timezone + ') 均在亚洲，偏移极小 (+3%)');
-          } else {
-            prob += 12;
-            factors.push('⚠️ 时区跨洲不一致 (+12%)：本机 ' + localTz + ' vs 节点 ' + data.timezone + '（网页端易触发风控）');
-          }
-        } else {
-          factors.push('✅ 本机系统时区与代理出口 IP 时区 100% 一致');
-        }
-      }
-
-      // 维度 5：DNS / WebRTC 泄露与 IPv6
-      if (lastDNSLeaked) {
-        prob += 18;
-        factors.push('🚨 检测到国内 DNS 泄露 (+18%)：建议在代理软件中开启 Fake-IP 或远程 DoH 解析');
-      }
-      if (lastWebRTCLeaked) {
-        prob += 14;
-        factors.push('⚠️ WebRTC UDP 暴露非代理公网 IP (+14%)');
-      }
-      if (data.isIPv6) {
-        prob += 8;
-        factors.push('⚠️ 当前为 IPv6 出口 (+8%)：建议使用 IPv4 节点防止前缀跳变');
-      }
-
-      // 维度 6：近期跨国切换节点频率（检查本地历史记录最近 5 条不同国家数量）
-      const hist = loadHistory().slice(0, 5);
-      const uniqueCountries = new Set(hist.map(h => h.country).filter(Boolean));
-      if (uniqueCountries.size >= 3) {
-        prob += 15;
-        factors.push('🚨 近期频繁跨国切换节点 (' + Array.from(uniqueCountries).join('/') + ' +15%)：固定单一地区可大幅降低封号率');
-      }
-
-      prob = Math.max(3, Math.min(98, prob));
-
-      // 更新封号概率 UI
-      const numEl = document.getElementById('banProbNum');
-      const fillEl = document.getElementById('banProgressFill');
-      numEl.textContent = prob + '%';
-      fillEl.style.width = prob + '%';
-
-      if (prob <= 20) {
-        numEl.style.color = '#16a34a';
-        fillEl.style.background = '#16a34a';
-        setPill('banProbLevel', '极低风险', 'green');
-        setPill('banSummaryBadge', '当前环境安全稳定 · 推荐固定使用该节点', 'green');
-        document.getElementById('banMainAdvice').textContent = '综合评估：当前网络特征健康，请保持节点固定，避免频繁切换国家。';
-      } else if (prob <= 45) {
-        numEl.style.color = '#d97706';
-        fillEl.style.background = '#f59e0b';
-        setPill('banProbLevel', '中低风险', 'yellow');
-        setPill('banSummaryBadge', '日常使用正常 · 注册/绑卡需谨慎', 'yellow');
-        document.getElementById('banMainAdvice').textContent = '综合评估：适合日常网页对话与 Claude Code，不建议在此环境下新注册或绑卡。';
-      } else {
-        numEl.style.color = '#dc2626';
-        fillEl.style.background = '#dc2626';
-        setPill('banProbLevel', '高危易封', 'red');
-        setPill('banSummaryBadge', '高危风控环境 · 强烈建议更换节点后再登录', 'red');
-        document.getElementById('banMainAdvice').textContent = '综合评估：存在明显风控诱因，直接登录 Claude 极易触发封号或手机验证拦截。';
-      }
-
-      document.getElementById('banFactorList').innerHTML = factors.slice(0, 4).map(f =>
-        `<div class="ban-factor-item">${f}</div>`
-      ).join('');
-
-      // 更新右侧三大使用场景评级
-      if (!data.regionSupported || prob >= 60) {
-        setPill('sceneWebPill', '极易封号', 'red');
-        setPill('sceneCliPill', '高危拦截', 'red');
-        setPill('scenePayPill', '禁止操作', 'red');
-      } else if (data.isHosting) {
-        setPill('sceneWebPill', prob <= 25 ? '安全可用' : '偶发验证', prob <= 25 ? 'green' : 'yellow');
-        setPill('sceneCliPill', '稳定可用', 'green');
-        setPill('scenePayPill', '不建议 (机房IP)', 'yellow');
-      } else {
-        setPill('sceneWebPill', '极佳 (原生/住宅)', 'green');
-        setPill('sceneCliPill', '极佳 (稳定)', 'green');
-        setPill('scenePayPill', '环境良好', 'green');
-      }
-    }
-
-    // ==================== 检查更新与外部链接处理 ====================
-    function triggerUpdateCheck(showModal) {
-      shouldPopupUpdateModal = Boolean(showModal);
-      if (showModal) {
-        document.getElementById('updateModal').classList.add('visible');
-        document.getElementById('updateModalTitle').textContent = '正在检查更新...';
-        document.getElementById('updateModalBody').textContent = `当前版本：v${APP_VERSION}\n正在连接 GitHub Releases 查询最新版本信息...`;
-        document.getElementById('btnDownloadUpdate').style.display = 'none';
-      }
-
-      const sent = postToNative('checkUpdate', { currentVersion: APP_VERSION });
-      if (!sent) {
-        // 浏览器兜底直接请求 GitHub API
-        fetch('https://api.github.com/repos/245678000000/claude-ip-checker/releases/latest')
-          .then(r => r.json())
-          .then(json => {
-            const latest = (json.tag_name || 'v1.1.0').replace(/^[vV]/, '');
-            const hasUp = latest !== APP_VERSION && latest > APP_VERSION;
-            window.onNativeUpdateResult({
-              currentVersion: 'v' + APP_VERSION,
-              latestVersion: 'v' + latest,
-              hasUpdate: hasUp,
-              releaseURL: json.html_url || 'https://github.com/245678000000/claude-ip-checker/releases',
-              downloadURL: json.html_url || 'https://github.com/245678000000/claude-ip-checker/releases',
-              releaseNotes: json.body || '',
-              errorMsg: ''
-            });
-          })
-          .catch(() => {
-            window.onNativeUpdateResult({
-              currentVersion: 'v' + APP_VERSION,
-              latestVersion: 'v' + APP_VERSION,
-              hasUpdate: false,
-              releaseURL: 'https://github.com/245678000000/claude-ip-checker/releases',
-              downloadURL: '',
-              releaseNotes: '',
-              errorMsg: '无法连接 GitHub 检查更新'
-            });
-          });
-      }
-    }
-
-    window.onNativeUpdateResult = function(res) {
-      if (!res) return;
-      const dot = document.getElementById('updateRedDot');
-      if (res.hasUpdate) {
-        dot.classList.add('visible');
-      } else {
-        dot.classList.remove('visible');
-      }
-
-      latestDownloadURL = res.downloadURL || res.releaseURL || 'https://github.com/245678000000/claude-ip-checker/releases';
-
-      if (!shouldPopupUpdateModal && !res.hasUpdate) {
-        return;
-      }
-
-      if (res.errorMsg) {
-        document.getElementById('updateModalTitle').textContent = '检查更新提示';
-        document.getElementById('updateModalBody').textContent = `当前版本：${res.currentVersion}\n${res.errorMsg}`;
-        document.getElementById('btnDownloadUpdate').style.display = 'none';
-      } else if (res.hasUpdate) {
-        document.getElementById('updateModal').classList.add('visible');
-        document.getElementById('updateModalTitle').textContent = `🎉 发现新版本 ${res.latestVersion}`;
-        document.getElementById('updateModalBody').textContent = `当前版本：${res.currentVersion}  →  最新版本：${res.latestVersion}\n\n更新内容：\n${res.releaseNotes || '包含新特性与风控模型升级'}`;
-        document.getElementById('btnDownloadUpdate').style.display = 'inline-block';
-      } else {
-        document.getElementById('updateModalTitle').textContent = `✅ 当前已是最新版本 (${res.currentVersion})`;
-        document.getElementById('updateModalBody').textContent = `当前运行版本：${res.currentVersion}\nGitHub 最新版本：${res.latestVersion}\n\n${res.releaseNotes || '所有风控规则与检测接口均为最新状态。'}`;
-        document.getElementById('btnDownloadUpdate').style.display = 'none';
-      }
-    };
-
-    function closeUpdateModal() {
-      document.getElementById('updateModal').classList.remove('visible');
-    }
-
-    function openExternal(url) {
-      if (!postToNative('openExternalURL', { url })) {
-        window.open(url, '_blank');
-      }
-    }
-
-    function downloadLatestRelease() {
-      openExternal(latestDownloadURL);
-    }
-
-    // ==================== 设备指纹与时区一致性校验 ====================
-    function checkDeviceFingerprint() {
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Unknown';
-      document.getElementById('devTimezone').textContent = tz;
-      document.getElementById('devLang').textContent = (navigator.languages || [navigator.language]).join(', ');
-      const isWin = navigator.userAgent.includes('Windows');
-      document.getElementById('devOS').textContent = isWin ? 'Windows · Native WebView2 Host' : 'macOS · Apple WebKit Native';
-
-      // WebGL 渲染器提取
-      try {
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        if (gl) {
-          const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
-          const renderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
-          document.getElementById('devWebGL').textContent = renderer || 'Apple GPU';
-        }
-      } catch (_) {
-        document.getElementById('devWebGL').textContent = 'Apple Metal GPU';
-      }
-
-      // Canvas 指纹 Hash 计算
-      try {
-        const c = document.createElement('canvas');
-        c.width = 220;
-        c.height = 40;
-        const ctx = c.getContext('2d');
-        ctx.textBaseline = 'top';
-        ctx.font = '14px Arial';
-        ctx.fillStyle = '#d97757';
-        ctx.fillRect(10, 5, 80, 24);
-        ctx.fillStyle = '#111827';
-        ctx.fillText('Claude-IP-Check-Mac', 14, 10);
-        const raw = c.toDataURL();
-        let hash = 2166136261;
-        for (let i = 0; i < raw.length; i++) {
-          hash ^= raw.charCodeAt(i);
-          hash = Math.imul(hash, 16777619);
-        }
-        document.getElementById('devCanvas').textContent = (hash >>> 0).toString(16).toUpperCase().padStart(8, '0');
-      } catch (_) {
-        document.getElementById('devCanvas').textContent = 'A94F2C81';
-      }
-    }
-
-    function verifyTimezoneConsistency() {
-      const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
-      if (!currentClaudeTimezone || currentClaudeTimezone === '未知') {
-        setPill('tzMatchPill', '已记录', 'gray');
-        return;
-      }
-      if (localTz === currentClaudeTimezone) {
-        setPill('tzMatchPill', '与IP时区一致', 'green');
-      } else {
-        setPill('tzMatchPill', `IP时区: ${currentClaudeTimezone}`, 'yellow');
-      }
-    }
-
-    // ==================== 本地历史记录管理 ====================
-    function loadHistory() {
-      try {
-        return JSON.parse(localStorage.getItem('claude_ip_history_v1') || '[]');
-      } catch (_) {
-        return [];
-      }
-    }
-
-    function saveHistoryItem(data) {
-      const list = loadHistory();
-      const now = new Date();
-      const timeStr = now.toTimeString().slice(0, 8);
-      const item = {
-        ip: data.ip,
-        flag: data.flag,
-        country: data.country,
-        city: data.city,
-        isp: data.isp,
-        score: data.trustScore,
-        level: data.trustLevel,
-        time: timeStr
-      };
-      // 如果最新一条 IP 相同则更新时间
-      if (list.length > 0 && list[0].ip === item.ip) {
-        list[0] = item;
-      } else {
-        list.unshift(item);
-      }
-      const trimmed = list.slice(0, 15);
-      localStorage.setItem('claude_ip_history_v1', JSON.stringify(trimmed));
-      renderHistory();
-    }
-
-    function renderHistory() {
-      const list = loadHistory();
-      document.getElementById('historyCount').textContent = list.length;
-      const box = document.getElementById('historyContainer');
-      if (list.length === 0) {
-        box.innerHTML = '<div class="history-empty">暂无历史检测记录</div>';
-        return;
-      }
-      box.innerHTML = list.map(item => {
-        const pillColor = item.score >= 80 ? 'green' : (item.score >= 60 ? 'yellow' : 'red');
-        return `
-          <div class="history-item">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span>${item.flag || '🌐'}</span>
-              <strong class="selectable">${item.ip}</strong>
-              <span style="color:var(--text-secondary);font-size:12px;">${item.country} · ${item.isp}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-              <span class="pill pill-${pillColor}">${item.score} ${item.level}</span>
-              <span style="color:var(--text-muted);font-size:11.5px;">${item.time}</span>
-            </div>
-          </div>
-        `;
-      }).join('');
-    }
-
-    function clearHistory() {
-      localStorage.removeItem('claude_ip_history_v1');
-      renderHistory();
-    }
-
-    // 浏览器预览环境下的纯前端兜底函数
-    async function runBrowserFallbackCheck() {
-      try {
-        const r = await fetch('https://ipwho.is/').then(res => res.json());
-        if (r && r.ip) {
-          const mock = {
-            ip: r.ip,
-            isIPv6: r.ip.includes(':'),
-            country: r.country || 'Taiwan',
-            countryCode: r.country_code || 'TW',
-            flag: (r.flag && r.flag.emoji) || '🌐',
-            city: r.city || '',
-            region: r.region || '',
-            asn: r.connection && r.connection.asn ? ('AS' + r.connection.asn) : 'AS--',
-            isp: (r.connection && r.connection.isp) || 'Unknown',
-            timezone: (r.timezone && r.timezone.id) || 'Asia/Taipei',
-            ipType: '机房IP',
-            ipTypeEn: '(Hosting)',
-            isHosting: true,
-            trustScore: 89,
-            trustLevel: '纯净',
-            trustDesc: '该 IP 信誉优异',
-            regionSupported: true,
-            regionStatusText: '正常',
-            vpnDetected: false,
-            proxyDetected: false,
-            torDetected: false,
-            crawlerDetected: false,
-            abuseDetected: false,
-            success: true
-          };
-          window.onNativeCloudflareIP({ ip: r.ip, flag: mock.flag, locationText: `${mock.country} ${mock.city} ${mock.isp}` });
-          window.onNativeClaudeRisk(mock);
-        }
-      } catch (_) {}
-    }
-
-    async function runBrowserAvailabilityFallback() {
-      const start = performance.now();
-      try {
-        await fetch('https://claude.ai/favicon.ico', { mode: 'no-cors', cache: 'no-store' });
-        const ms = Math.round(performance.now() - start);
-        window.onNativeAvailability([
-          { domain: 'claude.ai', reachable: true, latencyMs: ms, statusText: '正常' },
-          { domain: 'anthropic.com', reachable: true, latencyMs: ms + 12, statusText: '正常' }
-        ]);
-      } catch (_) {}
-    }
-
-    // 页面初始化
-    window.addEventListener('DOMContentLoaded', () => {
-      if (localStorage.getItem('claude_ip_theme') === 'dark') {
-        document.body.classList.add('dark');
-      }
-      if (window.location.protocol.startsWith('http')) {
-        setInterval(() => {
-          fetch('/api/heartbeat', { method: 'POST', keepalive: true }).catch(() => {});
-        }, 2500);
-        window.addEventListener('beforeunload', () => {
-          if (navigator.sendBeacon) {
-            navigator.sendBeacon('/api/quit');
-          }
-        });
-      }
-      renderHistory();
-      triggerFullCheck();
-      setTimeout(() => triggerUpdateCheck(false), 2500);
-    });
-  </script>
+  <script src="diagnostics.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>
